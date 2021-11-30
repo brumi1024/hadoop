@@ -211,7 +211,7 @@ public class TestAbsoluteResourceConfiguration {
     CapacityScheduler cs = (CapacityScheduler) rm.getResourceScheduler();
 
     ManagedParentQueue parentQueue = (ManagedParentQueue) cs.getQueue(QUEUED);
-    AutoCreatedLeafQueue d1 = new AutoCreatedLeafQueue(cs, "d1", parentQueue);
+    AutoCreatedLeafQueue d1 = new AutoCreatedLeafQueue(cs.getQueueContext(), "d1", parentQueue);
     cs.addQueue(d1);
 
     /**
@@ -236,7 +236,7 @@ public class TestAbsoluteResourceConfiguration {
      * d1 will occupy all entire resource
      * of Managed Parent queue.
      */
-    AutoCreatedLeafQueue d2 = new AutoCreatedLeafQueue(cs, "d2", parentQueue);
+    AutoCreatedLeafQueue d2 = new AutoCreatedLeafQueue(cs.getQueueContext(), "d2", parentQueue);
     cs.addQueue(d2);
 
     cs.getRootQueue().updateClusterResource(cs.getClusterResource(),
