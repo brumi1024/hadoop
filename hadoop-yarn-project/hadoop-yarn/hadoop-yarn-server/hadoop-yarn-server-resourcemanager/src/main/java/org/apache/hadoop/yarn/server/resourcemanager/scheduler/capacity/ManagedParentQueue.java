@@ -335,7 +335,7 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
     try {
       List<FiCaSchedulerApp> apps = new ArrayList<>();
       for (CSQueue childQueue : getChildQueues()) {
-        apps.addAll(((LeafQueue) childQueue).getApplications());
+        apps.addAll(((AbstractLeafQueue) childQueue).getApplications());
       }
       return Collections.unmodifiableList(apps);
     } finally {
@@ -348,7 +348,7 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
     try {
       List<FiCaSchedulerApp> apps = new ArrayList<>();
       for (CSQueue childQueue : getChildQueues()) {
-        apps.addAll(((LeafQueue) childQueue).getPendingApplications());
+        apps.addAll(((AbstractLeafQueue) childQueue).getPendingApplications());
       }
       return Collections.unmodifiableList(apps);
     } finally {
@@ -361,7 +361,7 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
     try {
       List<FiCaSchedulerApp> apps = new ArrayList<>();
       for (CSQueue childQueue : getChildQueues()) {
-        apps.addAll(((LeafQueue) childQueue).getAllApplications());
+        apps.addAll(((AbstractLeafQueue) childQueue).getAllApplications());
       }
       return Collections.unmodifiableList(apps);
     } finally {
