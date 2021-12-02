@@ -323,12 +323,12 @@ public abstract class AbstractCSQueue implements CSQueue {
     return this.queueNodeLabelsSettings.getDefaultLabelExpression();
   }
 
-  protected void setupQueueConfigs(Resource clusterResource,
-      CapacitySchedulerConfiguration configuration) throws
+  protected void setupQueueConfigs(Resource clusterResource) throws
       IOException {
 
     writeLock.lock();
     try {
+      CapacitySchedulerConfiguration configuration = queueContext.getConfiguration();
       if (isDynamicQueue() || this instanceof AbstractAutoCreatedLeafQueue) {
         setDynamicQueueProperties(configuration);
       }
@@ -348,10 +348,7 @@ public abstract class AbstractCSQueue implements CSQueue {
 
       // Setup queue's maximumAllocation respecting the global
       // and the queue settings
-      // TODO remove the getSchedulerConfiguration() param after the AQC configuration duplication
-      //  removal is resolved
-      this.queueAllocationSettings.setupMaximumAllocation(configuration,
-          queueContext.getConfiguration(), getQueuePath(),
+      this.queueAllocationSettings.setupMaximumAllocation(configuration, getQueuePath(),
           parent);
 
       // Initialize the queue state based on previous state, configured state
@@ -376,10 +373,7 @@ public abstract class AbstractCSQueue implements CSQueue {
           this, labelManager, null);
 
       // Store preemption settings
-      // TODO remove the getSchedulerConfiguration() param after the AQC configuration duplication
-      //  removal is resolved
-      this.preemptionSettings = new CSQueuePreemptionSettings(this, configuration,
-          queueContext.getConfiguration());
+      this.preemptionSettings = new CSQueuePreemptionSettings(this, configuration);
       this.priority = configuration.getQueuePriority(
           getQueuePath());
 

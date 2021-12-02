@@ -26,13 +26,10 @@ public class CSQueuePreemptionSettings {
 
   public CSQueuePreemptionSettings(
       CSQueue queue,
-      CapacitySchedulerConfiguration configuration,
-      CapacitySchedulerConfiguration originalSchedulerConfiguration) {
-    this.preemptionDisabled = isQueueHierarchyPreemptionDisabled(queue, configuration,
-        originalSchedulerConfiguration);
+      CapacitySchedulerConfiguration configuration) {
+    this.preemptionDisabled = isQueueHierarchyPreemptionDisabled(queue, configuration);
     this.intraQueuePreemptionDisabledInHierarchy =
-        isIntraQueueHierarchyPreemptionDisabled(queue, configuration,
-            originalSchedulerConfiguration);
+        isIntraQueueHierarchyPreemptionDisabled(queue, configuration);
   }
 
   /**
@@ -46,10 +43,9 @@ public class CSQueuePreemptionSettings {
    * @return true if queue has cross-queue preemption disabled, false otherwise
    */
   private boolean isQueueHierarchyPreemptionDisabled(CSQueue q,
-      CapacitySchedulerConfiguration configuration,
-      CapacitySchedulerConfiguration originalSchedulerConfiguration) {
+      CapacitySchedulerConfiguration configuration) {
     boolean systemWidePreemption =
-        originalSchedulerConfiguration
+        configuration
             .getBoolean(YarnConfiguration.RM_SCHEDULER_ENABLE_MONITORS,
                 YarnConfiguration.DEFAULT_RM_SCHEDULER_ENABLE_MONITORS);
     CSQueue parentQ = q.getParent();
@@ -62,7 +58,7 @@ public class CSQueuePreemptionSettings {
     // on, then q does not have preemption disabled (default=false, below)
     // unless the preemption_disabled property is explicitly set.
     if (parentQ == null) {
-      return originalSchedulerConfiguration.getPreemptionDisabled(q.getQueuePath(), false);
+      return configuration.getPreemptionDisabled(q.getQueuePath(), false);
     }
 
     // If this is not the root queue, inherit the default value for the
@@ -85,10 +81,9 @@ public class CSQueuePreemptionSettings {
    * @return true if queue has intra-queue preemption disabled, false otherwise
    */
   private boolean isIntraQueueHierarchyPreemptionDisabled(CSQueue q,
-      CapacitySchedulerConfiguration configuration,
-      CapacitySchedulerConfiguration originalSchedulerConfiguration) {
+      CapacitySchedulerConfiguration configuration) {
     boolean systemWideIntraQueuePreemption =
-        originalSchedulerConfiguration.getBoolean(
+        configuration.getBoolean(
             CapacitySchedulerConfiguration.INTRAQUEUE_PREEMPTION_ENABLED,
             CapacitySchedulerConfiguration
                 .DEFAULT_INTRAQUEUE_PREEMPTION_ENABLED);

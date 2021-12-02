@@ -166,15 +166,12 @@ public class AbstractLeafQueue extends AbstractCSQueue {
   }
 
   @SuppressWarnings("checkstyle:nowhitespaceafter")
-  protected void setupQueueConfigs(Resource clusterResource,
-      CapacitySchedulerConfiguration conf) throws
+  protected void setupQueueConfigs(Resource clusterResource) throws
       IOException {
     writeLock.lock();
     try {
-      // TODO conf parameter can be a modified configuration with template entries and missing
-      //  some global configs. This config duplication needs to be removed.
-      CapacitySchedulerConfiguration originalConfiguration = queueContext.getConfiguration();
-      super.setupQueueConfigs(clusterResource, conf);
+      CapacitySchedulerConfiguration configuration = queueContext.getConfiguration();
+      super.setupQueueConfigs(clusterResource);
 
       this.lastClusterResource = clusterResource;
 
@@ -189,26 +186,26 @@ public class AbstractLeafQueue extends AbstractCSQueue {
       setQueueResourceLimitsInfo(clusterResource);
 
       setOrderingPolicy(
-          conf.<FiCaSchedulerApp>getAppOrderingPolicy(getQueuePath()));
+          configuration.<FiCaSchedulerApp>getAppOrderingPolicy(getQueuePath()));
 
-      usersManager.setUserLimit(conf.getUserLimit(getQueuePath()));
-      usersManager.setUserLimitFactor(conf.getUserLimitFactor(getQueuePath()));
+      usersManager.setUserLimit(configuration.getUserLimit(getQueuePath()));
+      usersManager.setUserLimitFactor(configuration.getUserLimitFactor(getQueuePath()));
 
       maxAMResourcePerQueuePercent =
-          conf.getMaximumApplicationMasterResourcePerQueuePercent(
+          configuration.getMaximumApplicationMasterResourcePerQueuePercent(
               getQueuePath());
 
-      maxApplications = conf.getMaximumApplicationsPerQueue(getQueuePath());
+      maxApplications = configuration.getMaximumApplicationsPerQueue(getQueuePath());
       if (maxApplications < 0) {
         int maxGlobalPerQueueApps =
-            conf.getGlobalMaximumApplicationsPerQueue();
+            configuration.getGlobalMaximumApplicationsPerQueue();
         if (maxGlobalPerQueueApps > 0) {
           maxApplications = maxGlobalPerQueueApps;
         }
       }
 
-      priorityAcls = conf.getPriorityAcls(getQueuePath(),
-          originalConfiguration.getClusterLevelApplicationMaxPriority());
+      priorityAcls = configuration.getPriorityAcls(getQueuePath(),
+          configuration.getClusterLevelApplicationMaxPriority());
 
       Set<String> accessibleNodeLabels = this.queueNodeLabelsSettings.getAccessibleNodeLabels();
       if (!SchedulerUtils.checkQueueLabelExpression(accessibleNodeLabels,
@@ -224,10 +221,10 @@ public class AbstractLeafQueue extends AbstractCSQueue {
                         .join(getAccessibleNodeLabels().iterator(), ',')));
       }
 
-      nodeLocalityDelay = originalConfiguration.getNodeLocalityDelay();
-      rackLocalityAdditionalDelay = originalConfiguration
+      nodeLocalityDelay = configuration.getNodeLocalityDelay();
+      rackLocalityAdditionalDelay = configuration
           .getRackLocalityAdditionalDelay();
-      rackLocalityFullReset = originalConfiguration
+      rackLocalityFullReset = configuration
           .getRackLocalityFullReset();
 
       // re-init this since max allocation could have changed
@@ -250,10 +247,10 @@ public class AbstractLeafQueue extends AbstractCSQueue {
       }
 
       defaultAppPriorityPerQueue = Priority.newInstance(
-          conf.getDefaultApplicationPriorityConfPerQueue(getQueuePath()));
+          configuration.getDefaultApplicationPriorityConfPerQueue(getQueuePath()));
 
       // Validate leaf queue's user's weights.
-      float queueUserLimit = Math.min(100.0f, conf.getUserLimit(getQueuePath()));
+      float queueUserLimit = Math.min(100.0f, configuration.getUserLimit(getQueuePath()));
       getUserWeights().validateForLeafQueue(queueUserLimit, getQueuePath());
       usersManager.updateUserWeights();
 
@@ -529,9 +526,8 @@ public class AbstractLeafQueue extends AbstractCSQueue {
     }
   }
 
-  protected void reinitialize(
-      CSQueue newlyParsedQueue, Resource clusterResource,
-      CapacitySchedulerConfiguration configuration) throws
+  @Override
+  public void reinitialize(CSQueue newlyParsedQueue, Resource clusterResource) throws
       IOException {
 
     writeLock.lock();
@@ -565,18 +561,10 @@ public class AbstractLeafQueue extends AbstractCSQueue {
             + newMax);
       }
 
-      setupQueueConfigs(clusterResource, configuration);
+      setupQueueConfigs(clusterResource);
     } finally {
       writeLock.unlock();
     }
-  }
-
-  @Override
-  public void reinitialize(
-      CSQueue newlyParsedQueue, Resource clusterResource)
-      throws IOException {
-    reinitialize(newlyParsedQueue, clusterResource,
-        queueContext.getConfiguration());
   }
 
   @Override

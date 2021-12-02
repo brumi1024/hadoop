@@ -41,7 +41,7 @@ public class LeafQueue extends AbstractLeafQueue {
       IOException {
     super(queueContext, queueName, parent, old, isDynamic);
 
-    setupQueueConfigs(queueContext.getClusterResource(), queueContext.getConfiguration());
+    setupQueueConfigs(queueContext.getClusterResource());
 
     LOG.debug("Initialized LeafQueue: name={}, fullname={}", queueName,
         getQueuePath());

@@ -42,7 +42,8 @@ public class AutoCreatedLeafQueue extends AbstractAutoCreatedLeafQueue {
   public AutoCreatedLeafQueue(CapacitySchedulerQueueContext queueContext, String queueName,
       ManagedParentQueue parent) throws IOException {
     super(queueContext, queueName, parent, null);
-    super.setupQueueConfigs(queueContext.getClusterResource(), parent.getLeafQueueConfigs(queueName));
+    parent.setLeafQueueConfigs(queueName);
+    super.setupQueueConfigs(queueContext.getClusterResource());
 
     LOG.debug("Initialized AutoCreatedLeafQueue: name={}, fullname={}", queueName, getQueuePath());
     updateCapacitiesToZero();
@@ -57,8 +58,8 @@ public class AutoCreatedLeafQueue extends AbstractAutoCreatedLeafQueue {
 
       ManagedParentQueue managedParentQueue = (ManagedParentQueue) parent;
 
-      super.reinitialize(newlyParsedQueue, clusterResource, managedParentQueue
-          .getLeafQueueConfigs(newlyParsedQueue.getQueueShortName()));
+      managedParentQueue.setLeafQueueConfigs(newlyParsedQueue.getQueueShortName());
+      super.reinitialize(newlyParsedQueue, clusterResource);
 
       //Reset capacities to 0 since reinitialize above
       // queueCapacities to initialize to configured capacity which might
