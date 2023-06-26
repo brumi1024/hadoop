@@ -5242,6 +5242,8 @@ public class TestLeafQueue {
   public void testMaxApplicationsWithNodeLabels() throws IOException {
     CapacitySchedulerConfiguration conf = csConf;
     String rootChild = root.getChildQueues().get(0).getQueuePath();
+    when(cs.getClusterResource()).thenReturn(
+        Resources.createResource(2 * 16 * GB, 2 * 32));
 
     conf.setCapacityByLabel(ROOT, "test", 100);
     conf.setCapacityByLabel(rootChild, "test", 100);
