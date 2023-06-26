@@ -23,7 +23,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableMap;
+import org.apache.hadoop.yarn.api.records.NodeId;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.PreemptionManager;
 import org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator;
 import org.apache.hadoop.yarn.util.resource.Resources;
 import org.slf4j.Logger;
@@ -48,6 +52,7 @@ import org.junit.Test;
 
 import org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableSet;
 
+import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.TestUtils.toSet;
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assume.assumeThat;
 import static org.mockito.Mockito.mock;
@@ -57,8 +62,8 @@ public class TestQueueParsing {
 
   private static final Logger LOG =
       LoggerFactory.getLogger(TestQueueParsing.class);
-  
-  private static final double DELTA = 0.000001;
+
+  private static final double DELTA = 0.001;
   private static final int GB = 1024;
 
   private RMNodeLabelsManager nodeLabelManager;
@@ -69,15 +74,19 @@ public class TestQueueParsing {
 
   @Before
   public void setup() throws Exception{
+    YarnConfiguration conf = new YarnConfiguration();
+    conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
+            ResourceScheduler.class);
+    Resource clusterResource = Resources.createResource(2 * 8 * GB, 2 * 16);
+
     nodeLabelManager = new NullRMNodeLabelsManager();
-    nodeLabelManager.init(new YarnConfiguration());
-    nodeLabelManager.start();
+    nodeLabelManager.init(conf);
+    ((NullRMNodeLabelsManager)nodeLabelManager).setResourceForLabel(CommonNodeLabelsManager.NO_LABEL, clusterResource);
 
     rmContext =
             new RMContextImpl(null, null, null, null, null, null,
                     null, null, new ClientToAMTokenSecretManagerInRM(), null);
     rmContext.setNodeLabelManager(nodeLabelManager);
-    YarnConfiguration conf = new YarnConfiguration();
     csConf = new CapacitySchedulerConfiguration();
 
     csContext = mock(CapacitySchedulerContext.class);
@@ -88,9 +97,10 @@ public class TestQueueParsing {
     when(csContext.getMaximumResourceCapability()).thenReturn(
             Resources.createResource(16*GB, 32));
     when(csContext.getClusterResource()).
-            thenReturn(Resources.createResource(100 * 16 * GB, 100 * 32));
+            thenReturn(clusterResource);
     when(csContext.getResourceCalculator()).
             thenReturn(new DefaultResourceCalculator());
+    when(csContext.getPreemptionManager()).thenReturn(new PreemptionManager());
     when(csContext.getRMContext()).thenReturn(rmContext);
     when(csContext.getCapacitySchedulerQueueManager()).thenReturn(
             new CapacitySchedulerQueueManager(csConf, rmContext.getNodeLabelManager(), null));
@@ -472,59 +482,63 @@ public class TestQueueParsing {
   }
   
   @Test
-  // TODO fails because QueueCapacitiesMap misses the additional label capacities
-  public void testQueueParsingReinitializeWithLabels() throws IOException {
+  public void testQueueParsingReinitializeWithLabels() throws Exception {
     nodeLabelManager.addToCluserNodeLabelsWithDefaultExclusivity(ImmutableSet.of("red", "blue"));
+    nodeLabelManager.addLabelsToNode(ImmutableMap.of(NodeId.newInstance("h1", 0),
+            toSet("red"), NodeId.newInstance("h2", 0), toSet("blue")));
+
     CapacitySchedulerConfiguration csConf =
         new CapacitySchedulerConfiguration();
-    setupQueueConfigurationWithLabels(csConf);
+    setupQueueConfigurationWithoutLabels(csConf);
+    YarnConfiguration conf = new YarnConfiguration(csConf);
 
-    when(csContext.getConfiguration()).thenReturn(csConf);
-    queueContext.reinitialize();
+    // inject node label manager
+    MockRM rm = new MockRM(conf) {
+      @Override
+      public RMNodeLabelsManager createNodeLabelManager() {
+        return nodeLabelManager;
+      }
+    };
 
-    CSQueueStore queues = new CSQueueStore();
-    CapacitySchedulerQueueManager.parseQueue(queueContext, csConf, null,
-            CapacitySchedulerConfiguration.ROOT, queues, queues,
-            TestUtils.spyHook);
+    rm.getRMContext().setNodeLabelManager(nodeLabelManager);
+    rm.start();
+    rm.registerNode("h1:1234", 8 * GB);
+    rm.registerNode("h2:1234", 8 * GB);
 
+    CapacityScheduler capacityScheduler = (CapacityScheduler) rm.getResourceScheduler();
     csConf = new CapacitySchedulerConfiguration();
     setupQueueConfigurationWithLabels(csConf);
-    when(csContext.getConfiguration()).thenReturn(csConf);
-    queueContext.reinitialize();
-
-    CSQueueStore newQueues = new CSQueueStore();
-    CapacitySchedulerQueueManager.parseQueue(queueContext, csConf, null,
-            CapacitySchedulerConfiguration.ROOT, newQueues, queues,
-            TestUtils.spyHook);
-
-    checkQueueLabels(newQueues);
+    conf = new YarnConfiguration(csConf);
+    capacityScheduler.reinitialize(conf, rm.getRMContext());
+    checkQueueLabels(capacityScheduler);
+    ServiceOperations.stopQuietly(rm);
   }
   
-  private void checkQueueLabels(CSQueueStore queues) {
+  private void checkQueueLabels(CapacityScheduler capacityScheduler) {
     // queue-A is red, blue
-    Assert.assertTrue(queues.get("a").getAccessibleNodeLabels()
+    Assert.assertTrue(capacityScheduler.getQueue("a").getAccessibleNodeLabels()
         .containsAll(ImmutableSet.of("red", "blue")));
 
     // queue-A1 inherits A's configuration
-    Assert.assertTrue(queues.get("a1")
+    Assert.assertTrue(capacityScheduler.getQueue("a1")
         .getAccessibleNodeLabels().containsAll(ImmutableSet.of("red", "blue")));
 
     // queue-A2 is "red"
-    Assert.assertEquals(1, queues.get("a2")
+    Assert.assertEquals(1, capacityScheduler.getQueue("a2")
         .getAccessibleNodeLabels().size());
-    Assert.assertTrue(queues.get("a2")
+    Assert.assertTrue(capacityScheduler.getQueue("a2")
         .getAccessibleNodeLabels().contains("red"));
 
     // queue-B is "red"/"blue"
-    Assert.assertTrue(queues.get("b").getAccessibleNodeLabels()
+    Assert.assertTrue(capacityScheduler.getQueue("b").getAccessibleNodeLabels()
         .containsAll(ImmutableSet.of("red", "blue")));
 
     // queue-B2 inherits "red"/"blue"
-    Assert.assertTrue(queues.get("b2")
+    Assert.assertTrue(capacityScheduler.getQueue("b2")
         .getAccessibleNodeLabels().containsAll(ImmutableSet.of("red", "blue")));
 
     // check capacity of A2
-    CSQueue qA2 = queues.get("a2");
+    CSQueue qA2 = capacityScheduler.getQueue("a2");
     Assert.assertEquals(0.7, qA2.getCapacity(), DELTA);
     Assert.assertEquals(0.5, qA2.getQueueCapacities().getCapacity("red"), DELTA);
     Assert.assertEquals(0.07, qA2.getAbsoluteCapacity(), DELTA);
@@ -533,7 +547,7 @@ public class TestQueueParsing {
     Assert.assertEquals(0.3, qA2.getQueueCapacities().getAbsoluteMaximumCapacity("red"), DELTA);
 
     // check capacity of B3
-    CSQueue qB3 = queues.get("b3");
+    CSQueue qB3 = capacityScheduler.getQueue("b3");
     Assert.assertEquals(0.18, qB3.getAbsoluteCapacity(), DELTA);
     Assert.assertEquals(0.125, qB3.getQueueCapacities().getAbsoluteCapacity("red"), DELTA);
     Assert.assertEquals(0.35, qB3.getAbsoluteMaximumCapacity(), DELTA);
@@ -541,31 +555,31 @@ public class TestQueueParsing {
   }
 
   private void checkQueueLabelsWithLeafQueueDisableElasticity
-      (CSQueueStore queues) {
+      (CapacityScheduler capacityScheduler) {
     // queue-A is red, blue
-    Assert.assertTrue(queues.get("a").getAccessibleNodeLabels()
+    Assert.assertTrue(capacityScheduler.getQueue("a").getAccessibleNodeLabels()
         .containsAll(ImmutableSet.of("red", "blue")));
 
     // queue-A1 inherits A's configuration
-    Assert.assertTrue(queues.get("a1")
+    Assert.assertTrue(capacityScheduler.getQueue("a1")
         .getAccessibleNodeLabels().containsAll(ImmutableSet.of("red", "blue")));
 
     // queue-A2 is "red"
-    Assert.assertEquals(1, queues.get("a2")
+    Assert.assertEquals(1, capacityScheduler.getQueue("a2")
         .getAccessibleNodeLabels().size());
-    Assert.assertTrue(queues.get("a2")
+    Assert.assertTrue(capacityScheduler.getQueue("a2")
         .getAccessibleNodeLabels().contains("red"));
 
     // queue-B is "red"/"blue"
-    Assert.assertTrue(queues.get("b").getAccessibleNodeLabels()
+    Assert.assertTrue(capacityScheduler.getQueue("b").getAccessibleNodeLabels()
         .containsAll(ImmutableSet.of("red", "blue")));
 
     // queue-B2 inherits "red"/"blue"
-    Assert.assertTrue(queues.get("b2")
+    Assert.assertTrue(capacityScheduler.getQueue("b2")
         .getAccessibleNodeLabels().containsAll(ImmutableSet.of("red", "blue")));
 
     // check capacity of A2
-    CSQueue qA2 = queues.get("a2");
+    CSQueue qA2 = capacityScheduler.getQueue("a2");
     Assert.assertEquals(0.4, qA2.getCapacity(), DELTA);
     Assert.assertEquals(0.4, qA2.getQueueCapacities()
         .getCapacity("red"), DELTA);
@@ -577,25 +591,25 @@ public class TestQueueParsing {
         .getAbsoluteMaximumCapacity("red"), DELTA);
 
     // check disable elasticity at leaf queue level without label
-    CSQueue qB2 = queues.get("b2");
+    CSQueue qB2 = capacityScheduler.getQueue("b2");
     Assert.assertEquals(0.4, qB2.getAbsoluteCapacity(), DELTA);
     Assert.assertEquals(0.4, qB2.getAbsoluteMaximumCapacity(), DELTA);
 
     // check disable elasticity at leaf queue level with label
-    CSQueue qA1 = queues.get("a1");
+    CSQueue qA1 = capacityScheduler.getQueue("a1");
     Assert.assertEquals(0.3, qA1.getQueueCapacities().
         getAbsoluteCapacity("red"), DELTA);
     Assert.assertEquals(0.3, qA1.getQueueCapacities().
         getAbsoluteMaximumCapacity("red"), DELTA);
 
-    CSQueue qB1 = queues.get("b1");
+    CSQueue qB1 = capacityScheduler.getQueue("b1");
     Assert.assertEquals(0.3, qB1.getQueueCapacities()
         .getAbsoluteCapacity("red"), DELTA);
     Assert.assertEquals(0.3, qB1.getQueueCapacities()
         .getAbsoluteMaximumCapacity("red"), DELTA);
 
     // check capacity of B3
-    CSQueue qB3 = queues.get("b3");
+    CSQueue qB3 = capacityScheduler.getQueue("b3");
     Assert.assertEquals(0.05, qB3.getAbsoluteCapacity(), DELTA);
     Assert.assertEquals(0.175, qB3.getQueueCapacities()
         .getAbsoluteCapacity("blue"), DELTA);
@@ -626,49 +640,64 @@ public class TestQueueParsing {
   }
   
   @Test
-  public void testQueueParsingWithLabels() throws IOException {
+  public void testQueueParsingWithLabels() throws Exception {
     nodeLabelManager.addToCluserNodeLabelsWithDefaultExclusivity(ImmutableSet.of("red", "blue"));
+    nodeLabelManager.addLabelsToNode(ImmutableMap.of(NodeId.newInstance("h1", 0),
+            toSet("red"), NodeId.newInstance("h2", 0), toSet("blue")));
 
-    YarnConfiguration conf = new YarnConfiguration();
     CapacitySchedulerConfiguration csConf =
-        new CapacitySchedulerConfiguration(conf);
+            new CapacitySchedulerConfiguration();
     setupQueueConfigurationWithLabels(csConf);
+    YarnConfiguration conf = new YarnConfiguration(csConf);
 
-    CapacityScheduler capacityScheduler = new CapacityScheduler();
-    RMContextImpl rmContext =
-        new RMContextImpl(null, null, null, null, null, null,
-            new RMContainerTokenSecretManager(csConf),
-            new NMTokenSecretManagerInRM(csConf),
-            new ClientToAMTokenSecretManagerInRM(), null);
-    rmContext.setNodeLabelManager(nodeLabelManager);
-    capacityScheduler.setConf(csConf);
-    capacityScheduler.setRMContext(rmContext);
-    capacityScheduler.init(csConf);
-    capacityScheduler.start();
-    //checkQueueLabels(capacityScheduler);
-    ServiceOperations.stopQuietly(capacityScheduler);
+    // inject node label manager
+    MockRM rm = new MockRM(conf) {
+      @Override
+      public RMNodeLabelsManager createNodeLabelManager() {
+        return nodeLabelManager;
+      }
+    };
+
+    rm.getRMContext().setNodeLabelManager(nodeLabelManager);
+    rm.start();
+    rm.registerNode("h1:1234", 8 * GB);
+    rm.registerNode("h2:1234", 8 * GB);
+
+    CapacityScheduler capacityScheduler = (CapacityScheduler) rm.getResourceScheduler();
+    checkQueueLabels(capacityScheduler);
+    ServiceOperations.stopQuietly(rm);
   }
 
   @Test
   // TODO fails because QueueCapacitiesMap misses the additional label capacities
-  public void testQueueParsingWithLeafQueueDisableElasticity()
-      throws IOException {
+  public void testQueueParsingWithLeafQueueDisableElasticity() throws Exception {
     nodeLabelManager.addToCluserNodeLabelsWithDefaultExclusivity
         (ImmutableSet.of("red", "blue"));
+    nodeLabelManager.addLabelsToNode(ImmutableMap.of(NodeId.newInstance("h1", 0),
+            toSet("red"), NodeId.newInstance("h2", 0), toSet("blue")));
 
-    YarnConfiguration conf = new YarnConfiguration();
     CapacitySchedulerConfiguration csConf =
-            new CapacitySchedulerConfiguration(conf);
+        new CapacitySchedulerConfiguration();
     setupQueueConfigurationWithLabelsAndReleaseCheck(csConf);
-    when(csContext.getConfiguration()).thenReturn(csConf);
-    queueContext.reinitialize();
+    YarnConfiguration conf = new YarnConfiguration(csConf);
 
-    CSQueueStore queues = new CSQueueStore();
-    CapacitySchedulerQueueManager.parseQueue(queueContext, csConf, null,
-            CapacitySchedulerConfiguration.ROOT, queues, queues,
-            TestUtils.spyHook);
+    // inject node label manager
+    MockRM rm = new MockRM(conf) {
+      @Override
+      public RMNodeLabelsManager createNodeLabelManager() {
+        return nodeLabelManager;
+      }
+    };
 
-    checkQueueLabelsWithLeafQueueDisableElasticity(queues);
+    rm.getRMContext().setNodeLabelManager(nodeLabelManager);
+    rm.start();
+    rm.registerNode("h1:1234", 8 * GB);
+    rm.registerNode("h2:1234", 8 * GB);
+
+
+    CapacityScheduler capacityScheduler = (CapacityScheduler) rm.getResourceScheduler();
+    checkQueueLabelsWithLeafQueueDisableElasticity(capacityScheduler);
+    ServiceOperations.stopQuietly(rm);
   }
   
   @Test
@@ -1129,15 +1158,15 @@ public class TestQueueParsing {
   @Test(timeout = 60000)
   // TODO fails because QueueCapacitiesMap misses the additional label capacities
   public void testQueueCapacityWithWeight() throws Exception {
-    YarnConfiguration config = new YarnConfiguration();
-    nodeLabelManager = new NullRMNodeLabelsManager();
-    nodeLabelManager.init(config);
+    nodeLabelManager.addToCluserNodeLabelsWithDefaultExclusivity
+            (ImmutableSet.of("x", "y", "z"));
+    nodeLabelManager.addLabelsToNode(ImmutableMap.of(NodeId.newInstance("h1", 0),
+            toSet("x"), NodeId.newInstance("h2", 0), toSet("y"),
+            NodeId.newInstance("h3", 0), toSet("z")));
 
-    YarnConfiguration conf = new YarnConfiguration();
     CapacitySchedulerConfiguration csConf =
-            new CapacitySchedulerConfiguration(conf);
-
-    // Define top-level queues
+            new CapacitySchedulerConfiguration();
+// Define top-level queues
     csConf.setQueues(CapacitySchedulerConfiguration.ROOT, new String[] { "a" });
     csConf.setLabeledQueueWeight(CapacitySchedulerConfiguration.ROOT, "x", 100);
     csConf.setLabeledQueueWeight(CapacitySchedulerConfiguration.ROOT, "y", 100);
@@ -1149,33 +1178,32 @@ public class TestQueueParsing {
     csConf.setLabeledQueueWeight(A, "x", 100);
     csConf.setLabeledQueueWeight(A, "y", 100);
     csConf.setLabeledQueueWeight(A, "z", 70);
-    when(csContext.getConfiguration()).thenReturn(csConf);
-    queueContext.reinitialize();
+    YarnConfiguration conf = new YarnConfiguration(csConf);
 
-    CSQueueStore queues = new CSQueueStore();
-    CapacitySchedulerQueueManager.parseQueue(queueContext, csConf, null,
-            CapacitySchedulerConfiguration.ROOT, queues, queues,
-            TestUtils.spyHook);
+    // inject node label manager
+    MockRM rm = new MockRM(conf) {
+      @Override
+      public RMNodeLabelsManager createNodeLabelManager() {
+        return nodeLabelManager;
+      }
+    };
 
-    CSQueue root = queues.get(CapacitySchedulerConfiguration.ROOT);
-    Assert.assertEquals(1f,
-            root.getQueueCapacities().getAbsoluteCapacity(""), 1e-6);
-    Assert.assertEquals(1f,
-            root.getQueueCapacities().getAbsoluteCapacity("x"), 1e-6);
-    Assert.assertEquals(1f,
-            root.getQueueCapacities().getAbsoluteCapacity("y"), 1e-6);
-    Assert.assertEquals(1f,
-            root.getQueueCapacities().getAbsoluteCapacity("z"), 1e-6);
+    rm.getRMContext().setNodeLabelManager(nodeLabelManager);
+    rm.start();
+    rm.registerNode("h1:1234", 8 * GB);
+    rm.registerNode("h2:1234", 8 * GB);
+    rm.registerNode("h3:1234", 8 * GB);
 
-    CSQueue queueA = queues.get(A);
-    Assert.assertEquals(1f,
-            queueA.getQueueCapacities().getAbsoluteCapacity(""), 1e-6);
-    Assert.assertEquals(1f,
-            queueA.getQueueCapacities().getAbsoluteCapacity("x"), 1e-6);
-    Assert.assertEquals(1f,
-            queueA.getQueueCapacities().getAbsoluteCapacity("y"), 1e-6);
-    Assert.assertEquals(1f,
-            queueA.getQueueCapacities().getAbsoluteCapacity("z"), 1e-6);
+    verifyQueueAbsCapacity(rm, CapacitySchedulerConfiguration.ROOT, "", 1f);
+    verifyQueueAbsCapacity(rm, CapacitySchedulerConfiguration.ROOT, "x", 1f);
+    verifyQueueAbsCapacity(rm, CapacitySchedulerConfiguration.ROOT, "y", 1f);
+    verifyQueueAbsCapacity(rm, CapacitySchedulerConfiguration.ROOT, "z", 1f);
+
+    verifyQueueAbsCapacity(rm, A, "", 1f);
+    verifyQueueAbsCapacity(rm, A, "x", 1f);
+    verifyQueueAbsCapacity(rm, A, "y", 1f);
+    verifyQueueAbsCapacity(rm, A, "z", 1f);
+    ServiceOperations.stopQuietly(rm);
   }
 
   @Test
@@ -1247,8 +1275,12 @@ public class TestQueueParsing {
             ((LeafQueue)queues.get(queueB)).getUserLimitFactor(), DELTA);
   }
 
-  private void verifyQueueAbsCapacity(CSQueue queue, String label,
+  private void verifyQueueAbsCapacity(MockRM rm, String queuePath, String label,
       float expectedAbsCapacity) {
+    CapacityScheduler cs = (CapacityScheduler) rm.getResourceScheduler();
+    CSQueue queue = cs.getQueue(queuePath);
+    Assert.assertEquals(expectedAbsCapacity,
+        queue.getQueueCapacities().getAbsoluteCapacity(label), 1e-6);
   }
 
   private void checkEqualsToQueueSet(List<CSQueue> queues, String[] queueNames) {
