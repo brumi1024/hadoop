@@ -628,15 +628,17 @@ public class TestLinuxContainerExecutorWithMocks {
     when(context.getEnvironment()).thenReturn(env);
     Path workDir = new Path("/tmp");
 
+    LocalizerStartContext lsc = new LocalizerStartContext.Builder()
+        .setNmPrivateContainerTokens(nmPrivateCTokensPath)
+        .setNmAddr(address)
+        .setUser(appSubmitter)
+        .setAppId(appId.toString())
+        .setLocId("12345")
+        .setDirsHandler(dirService)
+        .build();
+
     try {
-      lce.startLocalizer(new LocalizerStartContext.Builder()
-          .setNmPrivateContainerTokens(nmPrivateCTokensPath)
-          .setNmAddr(address)
-          .setUser(appSubmitter)
-          .setAppId(appId.toString())
-          .setLocId("12345")
-          .setDirsHandler(dirService)
-          .build());
+      lce.startLocalizer(lsc);
       Assert.fail("startLocalizer should have thrown an exception");
     } catch (IOException e) {
       assertTrue("Unexpected exception " + e,
@@ -648,22 +650,14 @@ public class TestLinuxContainerExecutorWithMocks {
         LinuxContainerExecutor.ExitCode.INVALID_CONFIG_FILE.getExitCode(),
     };
 
-    for (int i = 0; i < exitCodesToThrow.length; i++) {
-      int exitCode = exitCodesToThrow[i];
+    for (int exitCode : exitCodesToThrow) {
       doThrow(new PrivilegedOperationException("invalid config", exitCode, null, null))
           .when(spyPrivilegedExecutor).executePrivilegedOperation(
               any(), any(PrivilegedOperation.class),
               any(), any(), anyBoolean(), anyBoolean());
 
       try {
-        lce.startLocalizer(new LocalizerStartContext.Builder()
-            .setNmPrivateContainerTokens(nmPrivateCTokensPath)
-            .setNmAddr(address)
-            .setUser(appSubmitter)
-            .setAppId(appId.toString())
-            .setLocId("12345")
-            .setDirsHandler(dirService)
-            .build());
+        lce.startLocalizer(lsc);
         Assert.fail("startLocalizer should have thrown a ConfigurationException");
       } catch (ConfigurationException e) {
         assertTrue("Unexpected exception " + e,
@@ -671,7 +665,8 @@ public class TestLinuxContainerExecutorWithMocks {
       }
     }
 
-    // Assert that we do catch an IOException thrown by the ProcessBuilder.start method as a misconfiguration
+    // Assert that we do catch an IOException thrown by the ProcessBuilder.start
+    // method as a misconfiguration
     String containerExecutorPath = lce.getContainerExecutorExecutablePath(conf);
     doThrow(new PrivilegedOperationException("IO error",
         new IOException("Cannot run program \""+ containerExecutorPath + "\"")))
@@ -680,14 +675,7 @@ public class TestLinuxContainerExecutorWithMocks {
             any(), any(), anyBoolean(), anyBoolean());
 
     try {
-      lce.startLocalizer(new LocalizerStartContext.Builder()
-          .setNmPrivateContainerTokens(nmPrivateCTokensPath)
-          .setNmAddr(address)
-          .setUser(appSubmitter)
-          .setAppId(appId.toString())
-          .setLocId("12345")
-          .setDirsHandler(dirService)
-          .build());
+      lce.startLocalizer(lsc);
       Assert.fail("startLocalizer should have thrown an ConfigurationException");
     } catch (ConfigurationException e) {
       assertTrue("Unexpected exception " + e,
@@ -702,14 +690,7 @@ public class TestLinuxContainerExecutorWithMocks {
             any(), any(), anyBoolean(), anyBoolean());
 
     try {
-      lce.startLocalizer(new LocalizerStartContext.Builder()
-          .setNmPrivateContainerTokens(nmPrivateCTokensPath)
-          .setNmAddr(address)
-          .setUser(appSubmitter)
-          .setAppId(appId.toString())
-          .setLocId("12345")
-          .setDirsHandler(dirService)
-          .build());
+      lce.startLocalizer(lsc);
       Assert.fail("startLocalizer should have thrown an IOException");
     } catch (ConfigurationException e) {
       Assert.fail("startLocalizer should not have thrown a ConfigurationException");
