@@ -1,0 +1,62 @@
+{
+  "app": {
+    "id": "application_1703001234567_0042",
+    "user": "spark-user",
+    "name": "SparkWordCount",
+    "queue": "root.analytics",
+    "state": "RUNNING",
+    "finalStatus": "UNDEFINED",
+    "progress": 68.5,
+    "trackingUI": "ApplicationMaster",
+    "trackingUrl": "http://node1:4040",
+    "diagnostics": "",
+    "clusterId": 1703001234567,
+    "applicationType": "SPARK",
+    "applicationTags": "department=analytics,team=data-eng",
+    "startedTime": 1703086400000,
+    "finishedTime": 0,
+    "elapsedTime": 3600000,
+    "amContainerLogs": "http://node1:8042/node/containerlogs/container_1703001234567_0042_01_000001/spark-user",
+    "amHostHttpAddress": "node1:8042",
+    "allocatedMB": 8192,
+    "allocatedVCores": 4,
+    "runningContainers": 8,
+    "memorySeconds": 29491200,
+    "vcoreSeconds": 14400,
+    "queueUsagePercentage": 22.5,
+    "clusterUsagePercentage": 12.5,
+    "preemptedResourceMB": 0,
+    "preemptedResourceVCores": 0,
+    "numNonAMContainerPreempted": 0,
+    "numAMContainerPreempted": 0,
+    "logAggregationStatus": "NOT_START",
+    "unmanagedApplication": false,
+    "priority": 0,
+    "appNodeLabelExpression": "",
+    "resourceRequests": [
+      {
+        "capability": { "memory": 1024, "vCores": 1 },
+        "nodeLabelExpression": "",
+        "numContainers": 3,
+        "priority": { "priority": 0 },
+        "relaxLocality": true,
+        "resourceName": "*"
+      }
+    ],
+    "attempts": {
+      "appAttempt": [
+        {
+          "id": 1,
+          "nodeId": "node1:8041",
+          "nodeHttpAddress": "node1:8042",
+          "logsLink": "http://node1:8042/node/containerlogs/container_1703001234567_0042_01_000001/spark-user",
+          "containerId": "container_1703001234567_0042_01_000001",
+          "startTime": 1703086400000,
+          "finishedTime": 0,
+          "appAttemptState": "RUNNING",
+          "amContainerLogs": "http://node1:8042/node/containerlogs/container_1703001234567_0042_01_000001/spark-user"
+        }
+      ]
+    }
+  }
+}

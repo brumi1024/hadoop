@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 
-
 import { Outlet, useLocation } from 'react-router';
 import { useState, useEffect } from 'react';
 import { useSchedulerStore } from '~/stores/schedulerStore';
 import { StagedChangesPanel } from '~/features/staged-changes/components/StagedChangesPanel';
+import { YarnAssistLauncher, YarnAssistSurface } from '~/features/assist/YarnAssist';
 import { AppSidebar } from '~/components/layouts/app-sidebar';
 import { ModeToggle } from '~/components/elements/mode-toggle';
 import { GlobalRefreshButton } from '~/components/elements/GlobalRefreshButton';
@@ -37,6 +37,7 @@ import { READ_ONLY_PROPERTY } from '~/config';
 
 export default function Layout() {
   const [stagedChangesPanelOpen, setStagedChangesPanelOpen] = useState(false);
+  const [assistOpen, setAssistOpen] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const loadInitialData = useSchedulerStore((state) => state.loadInitialData);
   const stagedChanges = useSchedulerStore((state) => state.stagedChanges);
@@ -170,63 +171,64 @@ export default function Layout() {
       }
     >
       <AppSidebar />
-      <SidebarInset>
-        <div className="flex flex-1 flex-col">
-          {/* Main content area */}
-          <div className="flex-1 flex flex-col">
-            {/* Header with page title */}
-            <header className="flex h-20 items-center gap-4 border-b bg-gradient-to-r from-background to-muted/20 px-6">
-              <SidebarTrigger />
-              <div className="flex-1">
-                <h1 className="text-2xl font-bold tracking-tight">{pageInfo.title}</h1>
-                <p className="text-sm text-muted-foreground">{pageInfo.description}</p>
-              </div>
-              <SearchBar className="w-72" placeholder="Search" />
-              {isReadOnly && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Badge variant="destructive" className="gap-1.5">
-                        <Lock className="h-3 w-3" />
-                        Read-Only
-                      </Badge>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Set {READ_ONLY_PROPERTY}=false in YARN to enable editing</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
-              <GlobalRefreshButton />
-              {location.pathname === '/' && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant={isComparisonModeActive ? 'default' : 'ghost'}
-                        size="icon"
-                        onClick={toggleComparisonMode}
-                        aria-label={
-                          isComparisonModeActive ? 'Exit comparison mode' : 'Enter comparison mode'
-                        }
-                      >
-                        <GitCompareArrows className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{isComparisonModeActive ? 'Exit comparison mode' : 'Compare queues'}</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
-              <DiagnosticsDialog />
-              <ModeToggle />
-            </header>
+      <SidebarInset className="h-svh min-h-0 overflow-hidden md:peer-data-[variant=inset]:h-[calc(100svh-1rem)]">
+        <div className="flex flex-1 flex-col min-h-0 min-w-0">
+          {/* Header with page title */}
+          <header className="flex h-20 items-center gap-4 border-b bg-gradient-to-r from-background to-muted/20 px-6 shrink-0">
+            <SidebarTrigger />
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold tracking-tight">{pageInfo.title}</h1>
+              <p className="text-sm text-muted-foreground">{pageInfo.description}</p>
+            </div>
+            <SearchBar className="w-72" placeholder="Search" />
+            {isReadOnly && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="destructive" className="gap-1.5">
+                      <Lock className="h-3 w-3" />
+                      Read-Only
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Set {READ_ONLY_PROPERTY}=false in YARN to enable editing</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            <GlobalRefreshButton />
+            {location.pathname === '/' && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={isComparisonModeActive ? 'default' : 'ghost'}
+                      size="icon"
+                      onClick={toggleComparisonMode}
+                      aria-label={
+                        isComparisonModeActive ? 'Exit comparison mode' : 'Enter comparison mode'
+                      }
+                    >
+                      <GitCompareArrows className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{isComparisonModeActive ? 'Exit comparison mode' : 'Compare queues'}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            <DiagnosticsDialog />
+            <YarnAssistLauncher open={assistOpen} onToggle={() => setAssistOpen((open) => !open)} />
+            <ModeToggle />
+          </header>
 
-            {/* Page content */}
-            <div className="flex-1 overflow-hidden">
+          {/* Page content + docked Assist panel side by side */}
+          <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+            <div className="flex-1 min-w-0 overflow-hidden">
               <Outlet />
             </div>
+            <YarnAssistSurface open={assistOpen} onClose={() => setAssistOpen(false)} />
           </div>
         </div>
       </SidebarInset>

@@ -1,0 +1,17 @@
+{
+  "clusterInfo": {
+    "id": 1703001234567,
+    "startedOn": 1703001234567,
+    "state": "STARTED",
+    "haState": "ACTIVE",
+    "rmStateStoreName": "org.apache.hadoop.yarn.server.resourcemanager.recovery.NullRMStateStore",
+    "resourceManagerVersion": "3.3.6",
+    "resourceManagerBuildVersion": "3.3.6 from d3d5508f2c631f7e by yarn source checksum",
+    "resourceManagerVersionBuiltOn": "2023-10-15T00:00Z",
+    "hadoopVersion": "3.3.6",
+    "hadoopBuildVersion": "3.3.6 from d3d5508f2c631f7e by yarn source checksum",
+    "hadoopVersionBuiltOn": "2023-10-15T00:00Z",
+    "resourceManagerStartTime": 1703001234567,
+    "resourceManagerActiveTime": 1703001234567
+  }
+}
