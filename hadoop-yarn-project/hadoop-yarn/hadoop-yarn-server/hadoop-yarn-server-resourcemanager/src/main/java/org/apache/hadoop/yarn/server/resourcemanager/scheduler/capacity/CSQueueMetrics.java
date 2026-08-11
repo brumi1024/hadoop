@@ -233,7 +233,7 @@ public class CSQueueMetrics extends QueueMetrics {
   }
 
   @Metrics(context="dummymetricssystem")
-  public static class DummyMetricsSystemImpl extends MetricsSystem {
+  private static class ValidationMetricsSystem extends MetricsSystem {
     @Override
     public MetricsSystem init(String prefix) {
       return this;
@@ -297,9 +297,8 @@ public class CSQueueMetrics extends QueueMetrics {
   public synchronized static CSQueueMetrics forQueue(String queueName,
       Queue parent, boolean enableUserMetrics, Configuration conf) {
     final boolean isConfigValidation = isConfigurationValidationSet(conf);
-
     MetricsSystem ms = isConfigValidation
-        ? new DummyMetricsSystemImpl() : DefaultMetricsSystem.instance();
+        ? new ValidationMetricsSystem() : DefaultMetricsSystem.instance();
     QueueMetrics metrics = getQueueMetrics().get(queueName);
     if (metrics == null) {
       metrics =
@@ -319,6 +318,25 @@ public class CSQueueMetrics extends QueueMetrics {
     }
 
     return (CSQueueMetrics) metrics;
+  }
+
+  /**
+   * Creates metrics storage for an isolated validation build without touching
+   * the global metrics system or the static live-queue registry.
+   */
+  public static CSQueueMetrics forValidation(String queueName, Queue parent,
+      boolean enableUserMetrics, Configuration conf) {
+    CSQueueMetrics metrics = (CSQueueMetrics) new CSQueueMetrics(
+        new ValidationMetricsSystem(), queueName, parent, enableUserMetrics,
+        conf)
+        .tag(QUEUE_INFO, queueName);
+    MetricsAnnotations.newSourceBuilder(metrics).build();
+    return metrics;
+  }
+
+  @Override
+  protected boolean shouldCachePartitionMetrics() {
+    return !(metricsSystem instanceof ValidationMetricsSystem);
   }
 
   @Override

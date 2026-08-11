@@ -31,6 +31,9 @@ import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 
 /**
  * Baseline timing harness for the CapacityScheduler config load, reinitialize
@@ -44,23 +47,29 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler
  *   -pl hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager \
  *   -DfailIfNoTests=false
  * </pre>
+ * Run each configured size in a separate forked JVM when recording results so
+ * heap state and JIT compilation from one size do not affect another size.
  *
  * Knobs (system properties, propagated by surefire from the mvn command line):
- * - cs.bench.sizes: comma list of requested queue counts, default 100,1000,5000
- * - cs.bench.iterations: fixed timed-iteration count, default auto per size
- * - cs.bench.warmups: fixed warmup count, default auto per size
+ * - {@code cs.bench.sizes}: comma list of requested queue counts, default
+ *   100,1000,5000
+ * - {@code cs.bench.iterations}: fixed timed-iteration count, default auto per
+ *   size
+ * - {@code cs.bench.warmups}: fixed warmup count, default auto per size
  *
  * Measured operations per size, against a live MockRM:
  * - load: new CapacityScheduler + setConf + setRMContext + init(conf), i.e. the
  *   serviceInit -> initScheduler -> initializeQueues path; stop() is untimed.
  * - reinitialize: scheduler.reinitialize(changedConf, rmContext) on the live
  *   scheduler, alternating between a mutated and the original config.
- * - validate: CapacitySchedulerConfigValidator.validateCSConfiguration(
- *   liveConf, changedConf, rmContext), the POST /scheduler-conf/validate core.
+ * - validate: immutable model parsing plus CSConfigValidationEngine, the
+ *   POST /scheduler-conf/validate core.
  *
  * Results are printed to stdout as BENCH lines (see surefire -output.txt).
  */
 public class CSConfigBaselineBenchmark {
+
+  private static final int MIN_TIMED_ITERATIONS = 5;
 
   private interface TimedOp {
     /** Runs one iteration and returns the elapsed nanos of the timed part. */
@@ -86,6 +95,10 @@ public class CSConfigBaselineBenchmark {
     int warmups = Integer.getInteger("cs.bench.warmups", defaultWarmups(requestedQueues));
     int iterations = Integer.getInteger("cs.bench.iterations",
         defaultIterations(requestedQueues));
+    if (iterations < MIN_TIMED_ITERATIONS) {
+      throw new IllegalArgumentException("cs.bench.iterations must be at least "
+          + MIN_TIMED_ITERATIONS + " for median reporting");
+    }
 
     System.out.println(String.format(Locale.ROOT,
         "BENCH-SETUP requested=%d queues=%d confProps=%d labels=%s "
@@ -135,16 +148,17 @@ public class CSConfigBaselineBenchmark {
           });
 
       // (c) POST /scheduler-conf/validate equivalent.
-      Configuration liveConf = cs.getConfig();
       measure("validate", requestedQueues, gen.getQueueCount(), warmups,
           iterations, iteration -> {
             Configuration target = new Configuration(
                 (iteration % 2 == 0) ? mutatedConf : originalConf);
             long t0 = System.nanoTime();
-            boolean valid = CapacitySchedulerConfigValidator
-                .validateCSConfiguration(liveConf, target, rmContext);
+            CapacitySchedulerConfiguration targetCapacity =
+                new CapacitySchedulerConfiguration(target, false);
+            ValidationResult result = new CSConfigValidationEngine().validate(
+                targetCapacity.getModel(), ClusterFacts.capture(cs));
             long elapsed = System.nanoTime() - t0;
-            if (!valid) {
+            if (!result.isValid()) {
               throw new IllegalStateException("generated config was invalid");
             }
             return elapsed;

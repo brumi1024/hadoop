@@ -31,8 +31,11 @@ import static org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableSe
 
 /**
  * Generates synthetic but structurally realistic capacity-scheduler
- * configuration content for N queues, for benchmarking the config
- * load / reinitialize / validate paths (wayfinder cs-config-reload ticket 0001).
+ * configuration content for a requested queue count.
+ * The output benchmarks the config load, reinitialize, and validate paths.
+ * Use it with {@link CSConfigBaselineBenchmark}, running each requested size in
+ * a separate forked JVM and controlling the run with {@code cs.bench.sizes},
+ * {@code cs.bench.iterations}, and {@code cs.bench.warmups}.
  *
  * Tree shape (mixed depth 3 and 4):
  * <pre>

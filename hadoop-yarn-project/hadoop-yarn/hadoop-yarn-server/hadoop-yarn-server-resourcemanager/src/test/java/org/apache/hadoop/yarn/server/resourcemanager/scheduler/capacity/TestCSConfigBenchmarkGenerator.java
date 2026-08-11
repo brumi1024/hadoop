@@ -26,6 +26,8 @@ import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -80,8 +82,10 @@ public class TestCSConfigBenchmarkGenerator {
     assertNotEquals(conf.get(capacityKey), mutated.get(capacityKey),
         "mutated copy should differ from the base config");
 
-    assertTrue(CapacitySchedulerConfigValidator.validateCSConfiguration(
-        cs.getConfig(), mutated, rm.getRMContext()),
+    CapacitySchedulerConfiguration mutatedCapacity =
+        new CapacitySchedulerConfiguration(mutated, false);
+    assertTrue(new CSConfigValidationEngine().validate(
+        mutatedCapacity.getModel(), ClusterFacts.capture(cs)).isValid(),
         "mutated config should validate");
     cs.reinitialize(mutated, rm.getRMContext());
   }
