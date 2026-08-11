@@ -36,6 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ValidationResultInfo;
 
 /**
  * A custom JSON provider that extends {@link org.eclipse.persistence.jaxb.rs.MOXyJsonProvider}
@@ -138,7 +139,8 @@ public class IncludeRootJSONProvider extends MOXyJsonProvider {
       Annotation[] annotations, MediaType mediaType, MultivaluedMap<String, Object> httpHeaders,
       Marshaller marshaller) throws JAXBException {
     LOG.trace("IncludeRootJSONProvider preWriteTo with {}", type);
-    marshaller.setProperty(MarshallerProperties.JSON_MARSHAL_EMPTY_COLLECTIONS, false);
+    marshaller.setProperty(MarshallerProperties.JSON_MARSHAL_EMPTY_COLLECTIONS,
+        object instanceof ValidationResultInfo);
     marshaller.setProperty(MarshallerProperties.JSON_INCLUDE_ROOT, true);
   }
 }

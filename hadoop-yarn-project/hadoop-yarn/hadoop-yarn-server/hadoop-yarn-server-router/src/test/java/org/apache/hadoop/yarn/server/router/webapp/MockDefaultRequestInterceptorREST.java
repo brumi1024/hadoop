@@ -1388,7 +1388,8 @@ public class MockDefaultRequestInterceptorREST
       conf.set(YarnConfiguration.SCHEDULER_CONFIGURATION_STORE_CLASS,
           YarnConfiguration.MEMORY_CONFIGURATION_STORE);
       provider.init(conf);
-      provider.logAndApplyMutation(UserGroupInformation.getCurrentUser(), mutationInfo);
+      provider.applyMutation(UserGroupInformation.getCurrentUser(),
+          mutationInfo);
     } catch (Exception e) {
       throw new RuntimeException(e);
     }

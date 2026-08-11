@@ -66,6 +66,10 @@ public final class RMWSConsts {
   public static final String SCHEDULER_CONF_VALIDATE
           = "/scheduler-conf/validate";
 
+  /** Path for structured Capacity Scheduler configuration validation. */
+  public static final String SCHEDULER_CONF_VALIDATE_V2
+      = "/scheduler-conf/validate/v2";
+
   /** Path for {@code RMWebServiceProtocol#getNodes}. */
   public static final String NODES = "/nodes";
 
