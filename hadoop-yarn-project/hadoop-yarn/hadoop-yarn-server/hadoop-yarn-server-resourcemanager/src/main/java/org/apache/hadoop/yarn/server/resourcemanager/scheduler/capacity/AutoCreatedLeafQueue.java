@@ -42,10 +42,10 @@ public class AutoCreatedLeafQueue extends AbstractAutoCreatedLeafQueue {
   private static final Logger LOG = LoggerFactory
       .getLogger(AutoCreatedLeafQueue.class);
 
-  public AutoCreatedLeafQueue(CapacitySchedulerQueueContext queueContext, String queueName,
+  public AutoCreatedLeafQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName,
       ManagedParentQueue parent) throws IOException {
     super(queueContext, queueName, parent, null);
-    parent.setLeafQueueConfigs(queueName);
     super.setupQueueConfigs(queueContext.getClusterResource());
 
     updateCapacitiesToZero();
@@ -58,9 +58,6 @@ public class AutoCreatedLeafQueue extends AbstractAutoCreatedLeafQueue {
     try {
       validate(newlyParsedQueue);
 
-      ManagedParentQueue managedParentQueue = (ManagedParentQueue) parent;
-
-      managedParentQueue.setLeafQueueConfigs(newlyParsedQueue.getQueueShortName());
       super.reinitialize(newlyParsedQueue, clusterResource);
 
       //Reset capacities to 0 since reinitialize above
@@ -132,22 +129,6 @@ public class AutoCreatedLeafQueue extends AbstractAutoCreatedLeafQueue {
         throw new SchedulerDynamicEditException(
             "Capacity demand is not in the [0,1] range: " + capacity);
       }
-    }
-  }
-
-  @Override
-  protected void parseAndSetDynamicTemplates() {
-    String parentTemplate = String.format("%s.%s", getParent().getQueuePath(),
-        CapacitySchedulerConfiguration
-            .AUTO_CREATED_LEAF_QUEUE_TEMPLATE_PREFIX);
-    Set<String> parentNodeLabels = queueContext
-        .getQueueManager().getConfiguredNodeLabelsForAllQueues()
-        .getLabelsByQueue(parentTemplate);
-
-    if (parentNodeLabels != null && parentNodeLabels.size() > 1) {
-      queueContext.getQueueManager().getConfiguredNodeLabelsForAllQueues()
-          .setLabelsByQueue(getQueuePath(),
-              new HashSet<>(parentNodeLabels));
     }
   }
 

@@ -68,6 +68,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.Activi
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.ActivityState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerApplicationAttempt.AMState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.UsersManager.User;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.KillableContainer;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.ContainerAllocationProposal;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.ResourceCommitRequest;
@@ -192,24 +193,16 @@ public class AbstractLeafQueue extends AbstractCSQueue {
       // absoluteMaxAvailCapacity during headroom/userlimit/allocation events)
       setQueueResourceLimitsInfo(clusterResource);
 
+      QueueConfigNode queueNode = getConfigNode();
       setOrderingPolicy(
-          configuration.<FiCaSchedulerApp>getAppOrderingPolicy(getQueuePathObject()));
-
-      usersManager.setUserLimit(configuration.getUserLimit(getQueuePathObject()));
-      usersManager.setUserLimitFactor(configuration.getUserLimitFactor(getQueuePathObject()));
+          configuration.<FiCaSchedulerApp>getAppOrderingPolicy(queueNode));
+      usersManager.setUserLimit(queueNode.getUserLimit());
+      usersManager.setUserLimitFactor(queueNode.getUserLimitFactor());
 
       maxAMResourcePerQueuePercent =
-          configuration.getMaximumApplicationMasterResourcePerQueuePercent(
-              getQueuePathObject());
+          queueNode.getMaximumApplicationMasterShare();
 
-      maxApplications = configuration.getMaximumApplicationsPerQueue(getQueuePathObject());
-      if (maxApplications < 0) {
-        int maxGlobalPerQueueApps =
-            configuration.getGlobalMaximumApplicationsPerQueue();
-        if (maxGlobalPerQueueApps > 0) {
-          maxApplications = maxGlobalPerQueueApps;
-        }
-      }
+      maxApplications = queueNode.getMaximumApplications();
 
       priorityAcls = configuration.getPriorityAcls(getQueuePathObject(),
           configuration.getClusterLevelApplicationMaxPriority());
@@ -1720,16 +1713,6 @@ public class AbstractLeafQueue extends AbstractCSQueue {
   }
 
   @Override
-  protected void parseAndSetDynamicTemplates() {
-    // set to -1, to disable it
-    queueContext.getConfiguration().setUserLimitFactor(getQueuePathObject(), -1);
-    // Set Max AM percentage to a higher value
-    queueContext.getConfiguration().setMaximumApplicationMasterResourcePerQueuePercent(
-        getQueuePathObject(), 1f);
-    super.parseAndSetDynamicTemplates();
-  }
-
-  @Override
   protected void setDynamicQueueACLProperties() {
     super.setDynamicQueueACLProperties();
 
@@ -1745,7 +1728,7 @@ public class AbstractLeafQueue extends AbstractCSQueue {
   private void updateSchedulerHealthForCompletedContainer(
       RMContainer rmContainer, ContainerStatus containerStatus) {
     // Update SchedulerHealth for released / preempted container
-    SchedulerHealth schedulerHealth = queueContext.getSchedulerHealth();
+    SchedulerHealth schedulerHealth = getQueueContext().getSchedulerHealth();
     if (null == schedulerHealth) {
       // Only do update if we have schedulerHealth
       return;
@@ -1756,7 +1739,7 @@ public class AbstractLeafQueue extends AbstractCSQueue {
           rmContainer.getContainerId(), getQueuePath());
       schedulerHealth.updateSchedulerPreemptionCounts(1);
     } else {
-      schedulerHealth.updateRelease(queueContext.getLastNodeUpdateTime(),
+      schedulerHealth.updateRelease(getQueueContext().getLastNodeUpdateTime(),
           rmContainer.getAllocatedNode(), rmContainer.getContainerId(),
           getQueuePath());
     }
@@ -2143,7 +2126,7 @@ public class AbstractLeafQueue extends AbstractCSQueue {
     // Careful! Locking order is important!
     writeLock.lock();
     try {
-      FiCaSchedulerNode node = queueContext.getNode(
+      FiCaSchedulerNode node = getQueueContext().getNode(
           rmContainer.getContainer().getNodeId());
       allocateResource(clusterResource, attempt,
           rmContainer.getContainer().getResource(), node.getPartition(),
@@ -2275,7 +2258,7 @@ public class AbstractLeafQueue extends AbstractCSQueue {
     if (application != null && rmContainer != null
         && rmContainer.getExecutionType() == ExecutionType.GUARANTEED) {
       FiCaSchedulerNode node =
-          queueContext.getNode(rmContainer.getContainer().getNodeId());
+          getQueueContext().getNode(rmContainer.getContainer().getNodeId());
       allocateResource(clusterResource, application, rmContainer.getContainer()
           .getResource(), node.getPartition(), rmContainer);
       LOG.info("movedContainer" + " container=" + rmContainer.getContainer()
@@ -2295,7 +2278,7 @@ public class AbstractLeafQueue extends AbstractCSQueue {
     if (application != null && rmContainer != null
         && rmContainer.getExecutionType() == ExecutionType.GUARANTEED) {
       FiCaSchedulerNode node =
-          queueContext.getNode(rmContainer.getContainer().getNodeId());
+          getQueueContext().getNode(rmContainer.getContainer().getNodeId());
       releaseResource(clusterResource, application, rmContainer.getContainer()
           .getResource(), node.getPartition(), rmContainer);
       LOG.info("movedContainer" + " container=" + rmContainer.getContainer()
@@ -2584,7 +2567,6 @@ public class AbstractLeafQueue extends AbstractCSQueue {
   @Override
   public boolean isEligibleForAutoDeletion() {
     return isDynamicQueue() && getNumApplications() == 0
-        && queueContext.getConfiguration().
-        isAutoExpiredDeletionEnabled(this.getQueuePathObject());
+        && isAutoExpiredDeletionEnabled();
   }
 }

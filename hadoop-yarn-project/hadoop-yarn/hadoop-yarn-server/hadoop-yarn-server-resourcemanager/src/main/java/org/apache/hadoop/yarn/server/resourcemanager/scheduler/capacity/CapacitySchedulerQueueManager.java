@@ -625,7 +625,7 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
           String parentOfMissingParent = new QueuePath(missingParent).getParent();
           permissions.add(new Permission(new PrivilegedEntity(missingParent),
               getACLsForFlexibleAutoCreatedParentQueue(
-                  new AutoCreatedQueueTemplate(csConf,
+                  new AutoCreatedQueueTemplate(csConf.getModel(),
                       new QueuePath(parentOfMissingParent)))));
         }
       }
@@ -638,7 +638,8 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
         // Every other case must be a Flexible Leaf Queue
         permissions.add(new Permission(privilegedEntity,
             getACLsForFlexibleAutoCreatedLeafQueue(
-                new AutoCreatedQueueTemplate(csConf, new QueuePath(queuePath.getParent())))));
+                new AutoCreatedQueueTemplate(csConf.getModel(),
+                    new QueuePath(queuePath.getParent())))));
       }
 
     } catch (SchedulerDynamicEditException e) {

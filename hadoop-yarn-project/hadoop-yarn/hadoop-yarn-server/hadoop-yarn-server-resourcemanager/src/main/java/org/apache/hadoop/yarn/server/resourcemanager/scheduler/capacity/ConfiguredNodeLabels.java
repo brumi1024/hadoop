@@ -45,7 +45,9 @@ public class ConfiguredNodeLabels {
 
   public ConfiguredNodeLabels(
       CapacitySchedulerConfiguration conf) {
-    this.configuredNodeLabelsByQueue = conf.getConfiguredNodeLabelsByQueue();
+    this.configuredNodeLabelsByQueue = new HashMap<>();
+    conf.getModel().getConfiguredNodeLabelsByQueue().forEach((path, labels) ->
+        configuredNodeLabelsByQueue.put(path, new HashSet<>(labels)));
   }
 
   /**

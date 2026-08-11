@@ -19,6 +19,7 @@ package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.util.Sets;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 import java.io.IOException;
 import java.util.Set;
 
@@ -35,34 +36,38 @@ public class QueueNodeLabelsSettings {
   private String defaultLabelExpression;
 
   public QueueNodeLabelsSettings(CapacitySchedulerConfiguration configuration,
-      CSQueue parent,
-      QueuePath queuePath,
+      CSQueue parent, QueuePath queuePath,
       ConfiguredNodeLabels configuredNodeLabels) throws IOException {
-    this.parent = parent;
-    this.queuePath = queuePath;
-    initializeNodeLabels(configuration, configuredNodeLabels);
+    this(configuration.getModel().effectiveConfigFor(queuePath), parent,
+        configuredNodeLabels.getLabelsByQueue(queuePath.getFullPath()));
   }
 
-  private void initializeNodeLabels(CapacitySchedulerConfiguration configuration,
-      ConfiguredNodeLabels configuredNodeLabels)
+  public QueueNodeLabelsSettings(QueueConfigNode queueNode, CSQueue parent,
+      Set<String> labels) throws IOException {
+    this.parent = parent;
+    this.queuePath = queueNode.getQueuePath();
+    initializeNodeLabels(queueNode, labels);
+  }
+
+  private void initializeNodeLabels(QueueConfigNode queueNode,
+      Set<String> labels)
       throws IOException {
-    initializeAccessibleLabels(configuration);
-    initializeDefaultLabelExpression(configuration);
-    initializeConfiguredNodeLabels(configuration, configuredNodeLabels);
+    initializeAccessibleLabels(queueNode);
+    initializeDefaultLabelExpression(queueNode);
+    initializeConfiguredNodeLabels(labels);
     validateNodeLabels();
   }
 
-  private void initializeAccessibleLabels(CapacitySchedulerConfiguration configuration) {
-    this.accessibleLabels = configuration.getAccessibleNodeLabels(queuePath);
+  private void initializeAccessibleLabels(QueueConfigNode queueNode) {
+    this.accessibleLabels = queueNode.getAccessibleNodeLabels();
     // Inherit labels from parent if not set
     if (this.accessibleLabels == null && parent != null) {
       this.accessibleLabels = parent.getAccessibleNodeLabels();
     }
   }
 
-  private void initializeDefaultLabelExpression(CapacitySchedulerConfiguration configuration) {
-    this.defaultLabelExpression = configuration.getDefaultNodeLabelExpression(
-        queuePath);
+  private void initializeDefaultLabelExpression(QueueConfigNode queueNode) {
+    this.defaultLabelExpression = queueNode.getDefaultNodeLabelExpression();
     // If the accessible labels is not null and the queue has a parent with a
     // similar set of labels copy the defaultNodeLabelExpression from the parent
     if (this.accessibleLabels != null && parent != null
@@ -72,19 +77,9 @@ public class QueueNodeLabelsSettings {
     }
   }
 
-  private void initializeConfiguredNodeLabels(CapacitySchedulerConfiguration configuration,
-      ConfiguredNodeLabels configuredNodeLabelsParam) {
-    if (configuredNodeLabelsParam != null) {
-      if (queuePath.isRoot()) {
-        this.configuredNodeLabels = configuredNodeLabelsParam.getAllConfiguredLabels();
-      } else {
-        this.configuredNodeLabels = configuredNodeLabelsParam.getLabelsByQueue(
-            queuePath.getFullPath());
-      }
-    } else {
-      // Fallback to suboptimal but correct logic
-      this.configuredNodeLabels = configuration.getConfiguredNodeLabels(queuePath);
-    }
+  private void initializeConfiguredNodeLabels(
+      Set<String> configuredNodeLabelsParam) {
+    this.configuredNodeLabels = configuredNodeLabelsParam;
   }
 
   private void validateNodeLabels() throws IOException {

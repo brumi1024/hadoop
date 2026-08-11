@@ -18,6 +18,7 @@ package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 import org.apache.hadoop.yarn.util.resource.ResourceUtils;
 import org.apache.hadoop.yarn.util.resource.Resources;
 
@@ -36,11 +37,16 @@ public class QueueAllocationSettings {
     this.minimumAllocation = minimumAllocation;
   }
 
-  void setupMaximumAllocation(CapacitySchedulerConfiguration configuration, QueuePath queuePath,
-      CSQueue parent) {
+  void setupMaximumAllocation(CapacitySchedulerConfiguration configuration,
+      QueueConfigNode queueNode, CSQueue parent) {
+    QueuePath queuePath = queueNode.getQueuePath();
     Resource clusterMax = ResourceUtils
         .fetchMaximumAllocationFromConfig(configuration);
-    Resource queueMax = configuration.getQueueMaximumAllocation(queuePath);
+    String rawMaximum = queueNode.getRawProperty(
+        CapacitySchedulerConfiguration.MAXIMUM_ALLOCATION);
+    Resource queueMax = rawMaximum == null ? Resources.none()
+        : ResourceUtils.createResourceFromString(rawMaximum,
+            ResourceUtils.getResourcesTypeInfo());
 
     maximumAllocation = Resources.clone(
         parent == null ? clusterMax : parent.getMaximumAllocation());
@@ -53,8 +59,10 @@ public class QueueAllocationSettings {
 
     if (queueMax == Resources.none()) {
       // Handle backward compatibility
-      long queueMemory = configuration.getQueueMaximumAllocationMb(queuePath);
-      int queueVcores = configuration.getQueueMaximumAllocationVcores(queuePath);
+      long queueMemory = parseLong(queueNode.getRawProperty(
+          CapacitySchedulerConfiguration.MAXIMUM_ALLOCATION_MB));
+      int queueVcores = (int) parseLong(queueNode.getRawProperty(
+          CapacitySchedulerConfiguration.MAXIMUM_ALLOCATION_VCORES));
       if (queueMemory != UNDEFINED) {
         maximumAllocation.setMemorySize(queueMemory);
       }
@@ -79,6 +87,10 @@ public class QueueAllocationSettings {
         maximumAllocation.setResourceInformation(ri.getName(), ri);
       }
     }
+  }
+
+  private static long parseLong(String value) {
+    return value == null ? (long) UNDEFINED : Long.parseLong(value);
   }
 
   public Resource getMinimumAllocation() {

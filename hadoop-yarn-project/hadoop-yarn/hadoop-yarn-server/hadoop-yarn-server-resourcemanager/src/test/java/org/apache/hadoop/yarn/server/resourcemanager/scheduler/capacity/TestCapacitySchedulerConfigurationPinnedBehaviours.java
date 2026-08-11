@@ -26,6 +26,7 @@ import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -106,6 +107,16 @@ public class TestCapacitySchedulerConfigurationPinnedBehaviours {
     assertEquals(100f, conf.getNonLabeledQueueCapacity(ROOT));
   }
 
+  @Test
+  public void testRootConfiguredNodeLabelsRemainRootLocal() {
+    CapacitySchedulerConfiguration conf = createConfiguration();
+    conf.setQueues(ROOT, new String[] {"child"});
+    conf.setCapacityByLabel(CHILD, "blue", 100f);
+
+    assertEquals(Set.of(RMNodeLabelsManager.NO_LABEL),
+        conf.getConfiguredNodeLabels(ROOT));
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {
       "6w",
@@ -165,4 +176,29 @@ public class TestCapacitySchedulerConfigurationPinnedBehaviours {
     assertEquals(false, conf.isAutoCreateChildQueueEnabled(CHILD));
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "'[memory=2048,vcores=50%]', false",
+      "'[memory=2048,vcores=2w]', true",
+      "'[foo]', true",
+      "'[memory=2048,vcores=2]', true",
+      "'memory=2048', false",
+      "'[memory=2048,vcores=2w', false"
+  })
+  public void testAbsoluteResourceClassificationUsesLegacyRawRegex(
+      String configuredCapacity, boolean expected) {
+    CapacitySchedulerConfiguration conf = createConfiguration();
+    conf.set(QueuePrefixes.getQueuePrefix(CHILD)
+        + CapacitySchedulerConfiguration.CAPACITY, configuredCapacity);
+
+    assertEquals(expected, conf.checkConfigTypeIsAbsoluteResource("", CHILD));
+  }
+
+  @Test
+  public void testLabeledAbsoluteResourceClassificationUsesLegacyRawRegex() {
+    CapacitySchedulerConfiguration conf = createConfiguration();
+    conf.setCapacityByLabel(CHILD, "gpu", "[memory=2048,vcores=2w]");
+
+    assertTrue(conf.checkConfigTypeIsAbsoluteResource("gpu", CHILD));
+  }
 }
