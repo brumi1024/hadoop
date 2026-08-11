@@ -38,7 +38,8 @@ public class ReservationQueue extends AbstractAutoCreatedLeafQueue {
 
   private PlanQueue parent;
 
-  public ReservationQueue(CapacitySchedulerQueueContext queueContext, String queueName,
+  public ReservationQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName,
       PlanQueue parent) throws IOException {
     super(queueContext, queueName, parent, null);
     super.setupQueueConfigs(queueContext.getClusterResource());

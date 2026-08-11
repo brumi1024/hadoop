@@ -152,7 +152,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
     try {
       CapacitySchedulerConfiguration configuration = queueContext.getConfiguration();
       autoCreatedQueueTemplate = new AutoCreatedQueueTemplate(
-          configuration, this.queuePath);
+          queueContext.getConfigModel(), this.queuePath);
       super.setupQueueConfigs(clusterResource);
       StringBuilder aclsString = new StringBuilder();
       for (Map.Entry<AccessType, AccessControlList> e : getACLs().entrySet()) {
@@ -218,19 +218,20 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
 
     for (CSQueue queue : queues) {
       for (String nodeLabel : queueCapacities.getExistingNodeLabels()) {
-        float capacityByLabel = queue.getQueueCapacities().getCapacity(nodeLabel);
-        if (capacityByLabel > 0) {
+        if (LegacyQueueModeProbes.isPercentageConfigured(queue, nodeLabel,
+            queueContext.getConfigModel())) {
           percentageIsSet = true;
         }
-        float weightByLabel = queue.getQueueCapacities().getWeight(nodeLabel);
         // By default weight is set to -1, so >= 0 is enough.
-        if (weightByLabel >= 0) {
+        if (LegacyQueueModeProbes.isWeightConfigured(queue, nodeLabel,
+            queueContext.getConfigModel())) {
           weightIsSet = true;
           diagMsg.append(
               "{Queue=" + queue.getQueuePath() + ", label=" + nodeLabel
                   + " uses weight mode}. ");
         }
-        if (checkConfigTypeIsAbsoluteResource(queue.getQueuePathObject(), nodeLabel)) {
+        if (LegacyQueueModeProbes.isAbsoluteConfigured(queue, nodeLabel,
+            queueContext.getConfiguration())) {
           absoluteMinResSet = true;
           // There's a special handling: when absolute resource is configured,
           // capacity will be calculated (and set) for UI/metrics purposes, so
@@ -1382,7 +1383,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
     // Careful! Locking order is important!
     writeLock.lock();
     try {
-      FiCaSchedulerNode node = queueContext.getNode(
+      FiCaSchedulerNode node = getQueueContext().getNode(
           rmContainer.getContainer().getNodeId());
       allocateResource(clusterResource,
           rmContainer.getContainer().getResource(), node.getPartition());
@@ -1420,7 +1421,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
       FiCaSchedulerApp application, RMContainer rmContainer) {
     if (application != null) {
       FiCaSchedulerNode node =
-          queueContext.getNode(rmContainer.getContainer().getNodeId());
+          getQueueContext().getNode(rmContainer.getContainer().getNodeId());
       allocateResource(clusterResource, rmContainer.getContainer()
           .getResource(), node.getPartition());
       LOG.info("movedContainer" + " queueMoveIn=" + getQueuePath()
@@ -1439,7 +1440,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
       FiCaSchedulerApp application, RMContainer rmContainer) {
     if (application != null) {
       FiCaSchedulerNode node =
-          queueContext.getNode(rmContainer.getContainer().getNodeId());
+          getQueueContext().getNode(rmContainer.getContainer().getNodeId());
       super.releaseResource(clusterResource,
           rmContainer.getContainer().getResource(),
           node.getPartition());
@@ -1526,9 +1527,9 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
     while (Resources.greaterThan(resourceCalculator, partitionResource,
         usageTracker.getQueueUsage().getUsed(partition), maxResource)) {
       RMContainer toKillContainer = killableContainerIter.next();
-      FiCaSchedulerApp attempt = queueContext.getApplicationAttempt(
+      FiCaSchedulerApp attempt = getQueueContext().getApplicationAttempt(
           toKillContainer.getContainerId().getApplicationAttemptId());
-      FiCaSchedulerNode node = queueContext.getNode(
+      FiCaSchedulerNode node = getQueueContext().getNode(
           toKillContainer.getAllocatedNode());
       if (null != attempt && null != node) {
         AbstractLeafQueue lq = attempt.getCSLeafQueue();
@@ -1638,8 +1639,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
   @Override
   public boolean isEligibleForAutoDeletion() {
     return isDynamicQueue() && getChildQueues().size() == 0 &&
-        queueContext.getConfiguration().
-            isAutoExpiredDeletionEnabled(this.getQueuePathObject());
+        isAutoExpiredDeletionEnabled();
   }
 
   public AutoCreatedQueueTemplate getAutoCreatedQueueTemplate() {

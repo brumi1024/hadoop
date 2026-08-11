@@ -26,9 +26,11 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceUsage;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerHealth;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.ActivitiesManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.PreemptionManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerApp;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerNode;
 import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
+import org.apache.hadoop.conf.Configuration;
 
 /**
  * Class to store common queue related information, like instances
@@ -74,6 +76,10 @@ public class CapacitySchedulerQueueContext {
     return queueManager;
   }
 
+  public ConfiguredNodeLabels getConfiguredNodeLabelsForAllQueues() {
+    return queueManager.getConfiguredNodeLabelsForAllQueues();
+  }
+
   public RMNodeLabelsManager getLabelManager() {
     return labelManager;
   }
@@ -94,8 +100,15 @@ public class CapacitySchedulerQueueContext {
     return configuration;
   }
 
-  public void setConfigurationEntry(String name, String value) {
-    this.configuration.set(name, value);
+  public CSConfigModel getConfigModel() {
+    return configuration.getModel();
+  }
+
+  public CSQueueMetrics createQueueMetrics(QueuePath queuePath,
+      CSQueue parent, boolean enableUserMetrics,
+      Configuration metricsConfiguration) {
+    return CSQueueMetrics.forQueue(queuePath.getFullPath(), parent,
+        enableUserMetrics, metricsConfiguration);
   }
 
   public Resource getMinimumAllocation() {

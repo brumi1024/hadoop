@@ -178,6 +178,84 @@ public class TestCapacitySchedulerAutoQueueCreation
   }
 
   @Test
+  public void testManagedParentPercentageTemplateVectors() throws Exception {
+    CapacitySchedulerConfiguration conf = setupSchedulerConfiguration();
+    setupQueueConfigurationForSingleAutoCreatedLeafQueue(conf);
+    conf.setAutoCreatedLeafQueueConfigCapacity(C, 25.0f);
+    conf.setAutoCreatedLeafQueueConfigMaxCapacity(C, 75.0f);
+    startSingleManagedParent(conf);
+
+    submitApp(mockRM, cs.getQueue(PARENT_QUEUE), USER0, USER0, 1, 1);
+    AutoCreatedLeafQueue leaf = (AutoCreatedLeafQueue) cs.getQueue(USER0);
+
+    assertEquals("[memory-mb=25.0%,vcores=25.0%]",
+        leaf.getConfiguredCapacityVector(NO_LABEL).toString());
+    assertEquals("[memory-mb=75.0%,vcores=75.0%]",
+        leaf.getConfiguredMaxCapacityVector(NO_LABEL).toString());
+  }
+
+  @Test
+  public void testManagedParentAbsoluteTemplateVectors() throws Exception {
+    CapacitySchedulerConfiguration conf = setupSchedulerConfiguration();
+    setupQueueConfigurationForSingleAutoCreatedLeafQueue(conf);
+    conf.setCapacity(C, "[memory=8192,vcores=4]");
+    conf.setAutoCreatedLeafQueueTemplateCapacityByLabel(C,
+        NO_LABEL, Resource.newInstance(2048, 2));
+    conf.setAutoCreatedLeafQueueTemplateMaxCapacity(C,
+        NO_LABEL, Resource.newInstance(4096, 4));
+    startSingleManagedParent(conf);
+
+    submitApp(mockRM, cs.getQueue(PARENT_QUEUE), USER0, USER0, 1, 1);
+    AutoCreatedLeafQueue leaf = (AutoCreatedLeafQueue) cs.getQueue(USER0);
+
+    assertEquals("[memory-mb=2048.0,vcores=2.0]",
+        leaf.getConfiguredCapacityVector(NO_LABEL).toString());
+    assertEquals("[memory-mb=4096.0,vcores=4.0]",
+        leaf.getConfiguredMaxCapacityVector(NO_LABEL).toString());
+  }
+
+  @Test
+  public void testManagedParentEmptyTemplateVectorsUseDefaults() throws Exception {
+    CapacitySchedulerConfiguration conf = setupSchedulerConfiguration();
+    setupQueueConfigurationForSingleAutoCreatedLeafQueue(conf);
+    String templatePrefix = QueuePrefixes.getQueuePrefix(
+        QueuePrefixes.getAutoCreatedQueueObjectTemplateConfPrefix(
+            C));
+    conf.unset(templatePrefix + CapacitySchedulerConfiguration.CAPACITY);
+    conf.unset(templatePrefix + CapacitySchedulerConfiguration.MAXIMUM_CAPACITY);
+    startSingleManagedParent(conf);
+
+    submitApp(mockRM, cs.getQueue(PARENT_QUEUE), USER0, USER0, 1, 1);
+    AutoCreatedLeafQueue leaf = (AutoCreatedLeafQueue) cs.getQueue(USER0);
+
+    assertEquals("[memory-mb=0.0%,vcores=0.0%]",
+        leaf.getConfiguredCapacityVector(NO_LABEL).toString());
+    assertEquals("[memory-mb=100.0%,vcores=100.0%]",
+        leaf.getConfiguredMaxCapacityVector(NO_LABEL).toString());
+  }
+
+  private void startSingleManagedParent(CapacitySchedulerConfiguration conf)
+      throws Exception {
+    if (mockRM != null) {
+      mockRM.stop();
+    }
+    conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
+        ResourceScheduler.class);
+    setupQueueMappings(conf, PARENT_QUEUE, true, new int[] {0});
+    RMNodeLabelsManager mgr = setupNodeLabelManager(conf);
+    mockRM = new MockRM(conf) {
+      protected RMNodeLabelsManager createNodeLabelManager() {
+        return mgr;
+      }
+    };
+    cs = (CapacityScheduler) mockRM.getResourceScheduler();
+    cs.updatePlacementRules();
+    mockRM.start();
+    cs.start();
+    setupNodes(mockRM);
+  }
+
+  @Test
   @Timeout(value = 20)
   public void testAutoCreateLeafQueueCreationSchedulerMaximumAllocation()
       throws Exception {

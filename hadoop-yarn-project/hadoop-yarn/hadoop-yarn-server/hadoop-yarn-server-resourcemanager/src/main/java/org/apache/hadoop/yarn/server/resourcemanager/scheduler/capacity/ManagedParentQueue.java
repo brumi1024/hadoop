@@ -23,6 +23,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueResourceQuot
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceLimits;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler
     .SchedulerDynamicEditException;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.queuemanagement.GuaranteedOrZeroCapacityOverTimePolicy;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica
     .FiCaSchedulerApp;
@@ -34,12 +35,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
-import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.AUTO_CREATED_LEAF_QUEUE_TEMPLATE_PREFIX;
-import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.CAPACITY;
-import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.MAXIMUM_CAPACITY;
 import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.getQueueCapacityConfigParser;
 
 /**
@@ -172,7 +169,7 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
     QueuePath templateQueuePath = QueuePrefixes
         .getAutoCreatedQueueObjectTemplateConfPrefix(getQueuePathObject());
     Set<String> templateConfiguredNodeLabels = queueContext
-        .getQueueManager().getConfiguredNodeLabelsForAllQueues()
+        .getConfiguredNodeLabelsForAllQueues()
         .getLabelsByQueue(templateQueuePath.getFullPath());
     //Load template capacities
     QueueCapacities queueCapacities = new QueueCapacities(false);
@@ -195,12 +192,13 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
     return builder;
   }
 
-  private void setAbsoluteResourceTemplates(CapacitySchedulerConfiguration configuration,
-                                            QueueResourceQuotas queueResourceQuotas) throws IOException {
+  private void setAbsoluteResourceTemplates(
+      CapacitySchedulerConfiguration configuration,
+      QueueResourceQuotas queueResourceQuotas) throws IOException {
     QueuePath templateQueuePath = QueuePrefixes
         .getAutoCreatedQueueObjectTemplateConfPrefix(getQueuePathObject());
     Set<String> templateConfiguredNodeLabels = queueContext
-        .getQueueManager().getConfiguredNodeLabelsForAllQueues()
+        .getConfiguredNodeLabelsForAllQueues()
         .getLabelsByQueue(templateQueuePath.getFullPath());
 
     for (String nodeLabel : templateConfiguredNodeLabels) {
@@ -366,20 +364,23 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
   }
 
   private void setLeafQueuesCapacityVector(AutoCreatedLeafQueue leafQueue) {
-    // Parse the capacityVector specified in the leaf-template
-    CapacitySchedulerConfiguration leafConfig = leafQueueTemplate.getLeafQueueConfigs();
     Set<String> templateConfiguredNodeLabels = queueContext
-        .getQueueManager().getConfiguredNodeLabelsForAllQueues()
+        .getConfiguredNodeLabelsForAllQueues()
         .getLabelsByQueue(queuePath.getFullPath());
+    QueueConfigNode leafNode = queueContext.getConfigModel()
+        .effectiveConfigFor(leafQueue.getQueuePathObject(), true, true);
     for (String label : templateConfiguredNodeLabels) {
-      final String leafConfigPath =
-          QueuePrefixes.getNodeLabelPrefix(
-              QueuePrefixes.getAutoCreatedQueueObjectTemplateConfPrefix(getQueuePathObject()),
-                  label);
-      String capacityString = leafConfig.get(leafConfigPath + CAPACITY, "0");
+      QueueConfigNode.CapacityValue capacity = leafNode.getCapacity(label);
+      String capacityString = capacity == null || capacity.getRawValue() == null
+          ? "0" : capacity.getRawValue();
       leafQueue.setConfiguredMinCapacityVector(label,
           getQueueCapacityConfigParser().parse(capacityString, leafQueue.getQueuePathObject()));
-      String maxCapacityString = leafConfig.get(leafConfigPath + MAXIMUM_CAPACITY, "100");
+      QueueConfigNode.CapacityValue maximumCapacity =
+          leafNode.getMaximumCapacity(label);
+      String maximumRaw = maximumCapacity == null
+          ? null : maximumCapacity.getRawValue();
+      String maxCapacityString = maximumRaw == null || maximumRaw.trim().isEmpty()
+          ? "100" : maximumRaw;
       leafQueue.setConfiguredMaxCapacityVector(label,
           getQueueCapacityConfigParser().parse(maxCapacityString, leafQueue.getQueuePathObject()));
     }
@@ -511,13 +512,4 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
     }
   }
 
-  public void setLeafQueueConfigs(String leafQueueName) {
-    CapacitySchedulerConfiguration templateConfig = leafQueueTemplate.getLeafQueueConfigs();
-    for (Map.Entry<String, String> confKeyValuePair : templateConfig) {
-      final String name = confKeyValuePair.getKey()
-          .replaceFirst(AUTO_CREATED_LEAF_QUEUE_TEMPLATE_PREFIX,
-              leafQueueName);
-      queueContext.setConfigurationEntry(name, confKeyValuePair.getValue());
-    }
-  }
 }
