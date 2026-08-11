@@ -32,6 +32,10 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCap
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector.ResourceUnitCapacityType;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -104,6 +108,12 @@ public class TestCSConfigModelBuilder {
         .filter(item -> "deprecated-key".equals(item.getCode()))
         .findFirst().orElseThrow();
     assertEquals("topology.script.file.name", diagnostic.getPropertyKey());
+    ValidationResult result = new CSConfigValidationEngine().validate(model,
+        ClusterFacts.empty());
+    assertTrue(result.isValid(), result.getIssues().toString());
+    assertTrue(result.getIssues().stream().anyMatch(issue ->
+        "deprecated-key".equals(issue.getRuleId())
+            && issue.getSeverity() == ValidationIssue.Severity.WARNING));
   }
 
   @Test

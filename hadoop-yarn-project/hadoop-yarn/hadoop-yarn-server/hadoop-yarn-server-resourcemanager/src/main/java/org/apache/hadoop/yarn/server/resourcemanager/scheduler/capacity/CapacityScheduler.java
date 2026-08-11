@@ -47,6 +47,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.LimitedPrivate;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Evolving;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
@@ -122,6 +123,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.Alloca
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.CSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.FileBasedCSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.MutableCSConfigurationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.KillableContainer;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.PreemptionManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.AssignmentInformation;
@@ -492,6 +494,20 @@ public class CapacityScheduler extends
   public void reinitialize(Configuration newConf, RMContext rmContext)
       throws IOException {
     reinitialize(newConf, rmContext, false);
+  }
+
+  /**
+   * Captures validation facts while holding the scheduler read lock.
+   * @return a consistent point-in-time scheduler snapshot
+   */
+  @Private
+  public ClusterFacts captureClusterFacts() {
+    readLock.lock();
+    try {
+      return ClusterFacts.capture(this);
+    } finally {
+      readLock.unlock();
+    }
   }
 
   long getAsyncScheduleInterval() {

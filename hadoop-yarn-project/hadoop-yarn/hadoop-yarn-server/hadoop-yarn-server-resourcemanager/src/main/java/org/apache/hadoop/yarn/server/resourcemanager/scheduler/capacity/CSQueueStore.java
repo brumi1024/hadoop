@@ -55,7 +55,12 @@ public class CSQueueStore {
    * @return Map containing all queues and having path as key
    */
   Map<String, CSQueue> getFullNameQueues() {
-    return ImmutableMap.copyOf(fullNameQueues);
+    try {
+      modificationLock.readLock().lock();
+      return ImmutableMap.copyOf(fullNameQueues);
+    } finally {
+      modificationLock.readLock().unlock();
+    }
   }
 
   /**

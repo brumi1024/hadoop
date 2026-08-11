@@ -300,7 +300,8 @@ public class CSQueueMetrics extends QueueMetrics {
 
     MetricsSystem ms = isConfigValidation
         ? new DummyMetricsSystemImpl() : DefaultMetricsSystem.instance();
-    QueueMetrics metrics = getQueueMetrics().get(queueName);
+    QueueMetrics metrics = isConfigValidation
+        ? null : getQueueMetrics().get(queueName);
     if (metrics == null) {
       metrics =
           new CSQueueMetrics(ms, queueName, parent, enableUserMetrics, conf)

@@ -25,6 +25,7 @@ import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableMap;
 import org.apache.hadoop.yarn.LocalConfigurationProvider;
 import org.apache.hadoop.yarn.api.protocolrecords.ResourceTypes;
+import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.api.records.impl.LightWeightResource;
@@ -558,6 +559,29 @@ public class TestCapacitySchedulerConfigValidator {
       assertTrue(e.getCause().getMessage()
               .contains("the queue is not yet in stopped state"));
     }
+  }
+
+  @Test
+  public void testLowercaseStoppedStateInvisibleToDeletionCheck() {
+    QueuePath queuePath = new QueuePath("root.test");
+    LeafQueue oldQueue = mock(LeafQueue.class);
+    when(oldQueue.getQueuePath()).thenReturn(queuePath.getFullPath());
+    when(oldQueue.getQueuePathObject()).thenReturn(queuePath);
+    when(oldQueue.getQueueShortName()).thenReturn("test");
+    when(oldQueue.getState()).thenReturn(QueueState.RUNNING);
+    when(oldQueue.isDynamicQueue()).thenReturn(false);
+
+    CSQueueStore oldQueues = new CSQueueStore();
+    oldQueues.add(oldQueue);
+    CapacitySchedulerConfiguration newConf =
+        new CapacitySchedulerConfiguration(new Configuration(false), false);
+    newConf.set(QueuePrefixes.getQueuePrefix(queuePath) + "state", "stopped");
+
+    IOException failure = assertThrows(IOException.class,
+        () -> CapacitySchedulerConfigValidator.validateQueueHierarchy(
+            oldQueues, new CSQueueStore(), newConf));
+    assertTrue(failure.getMessage().contains("root.test cannot be deleted"));
+    assertTrue(failure.getMessage().contains("not yet in stopped state"));
   }
 
   /**
