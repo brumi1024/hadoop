@@ -155,8 +155,12 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.YarnScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfigValidator;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fifo.FifoScheduler;
@@ -209,6 +213,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.SchedulerTypeInf
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.StatisticsItemInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ConfigVersionInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.SchedulerOverviewInfo;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ValidationResultInfo;
 import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
 import org.apache.hadoop.yarn.server.utils.BuilderUtils;
 import org.apache.hadoop.yarn.server.webapp.WebServices;
@@ -2729,13 +2734,6 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
         MutableConfigurationProvider mutableConfigurationProvider =
             ((MutableConfScheduler) scheduler).getMutableConfProvider();
         mutableConfigurationProvider.formatConfigurationInStore(conf);
-        try {
-          rm.getRMContext().getRMAdminService().refreshQueues();
-        } catch (IOException | YarnException e) {
-          LOG.error("Exception thrown when formatting configuration.", e);
-          mutableConfigurationProvider.revertToOldConfig(conf);
-          throw e;
-        }
         return Response.status(Status.OK).entity("Configuration under " +
             "store successfully formatted.").build();
       } catch (Exception e) {
@@ -2767,24 +2765,15 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       try {
         MutableConfigurationProvider mutableConfigurationProvider =
                 ((MutableConfScheduler) scheduler).getMutableConfProvider();
-        Configuration schedulerConf = mutableConfigurationProvider
-                .getConfiguration();
-        Configuration newSchedulerConf = mutableConfigurationProvider
-                .applyChanges(schedulerConf, mutationInfo);
-        Configuration yarnConf = ((CapacityScheduler) scheduler).getConf();
-
-        Configuration newConfig = new Configuration(yarnConf);
-        Iterator<Map.Entry<String, String>> iter = newSchedulerConf.iterator();
-        Entry<String, String> e = null;
-        while (iter.hasNext()) {
-          e = iter.next();
-          newConfig.set(e.getKey(), e.getValue());
+        ProposedValidation proposed = validateProposedConfiguration(
+            mutableConfigurationProvider, (CapacityScheduler) scheduler,
+            mutationInfo);
+        if (!proposed.result.isValid()) {
+          throw new IOException(joinErrorIssues(proposed.result));
         }
-        CapacitySchedulerConfigValidator.validateCSConfiguration(yarnConf,
-                newConfig, rm.getRMContext());
 
         return Response.status(Status.OK)
-                .entity(new ConfInfo(newSchedulerConf))
+                .entity(new ConfInfo(proposed.configuration))
                 .build();
       } catch (Exception e) {
         String errorMsg = "CapacityScheduler configuration validation failed:"
@@ -2801,6 +2790,83 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       return Response.status(Status.BAD_REQUEST)
               .entity(errorMsg)
               .build();
+    }
+  }
+
+  @POST
+  @Path(RMWSConsts.SCHEDULER_CONF_VALIDATE_V2)
+  @Produces({ MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8,
+      MediaType.APPLICATION_XML + "; " + JettyUtils.UTF_8 })
+  @Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
+  public synchronized Response validateSchedulerConfigurationStructured(
+      SchedConfUpdateInfo mutationInfo, @Context HttpServletRequest hsr)
+      throws AuthorizationException {
+    UserGroupInformation callerUGI = getCallerUserGroupInformation(hsr, true);
+    initForWritableEndpoints(callerUGI, true);
+    ResourceScheduler scheduler = rm.getResourceScheduler();
+    if (!isConfigurationMutable(scheduler)) {
+      return Response.status(Status.BAD_REQUEST).entity(String.format(
+          "Configuration change validation only supported by %s.",
+          MutableConfScheduler.class.getSimpleName())).build();
+    }
+    try {
+      MutableConfigurationProvider provider =
+          ((MutableConfScheduler) scheduler).getMutableConfProvider();
+      ProposedValidation proposed = validateProposedConfiguration(provider,
+          (CapacityScheduler) scheduler, mutationInfo);
+      ValidationResultInfo entity = ValidationResultInfo.from(
+          proposed.result, proposed.configVersion);
+      return Response.status(proposed.result.isValid()
+          ? Status.OK : Status.BAD_REQUEST).entity(entity).build();
+    } catch (Exception e) {
+      LOG.warn("CapacityScheduler configuration validation failed", e);
+      return Response.status(Status.BAD_REQUEST).entity(e.getMessage()).build();
+    }
+  }
+
+  private ProposedValidation validateProposedConfiguration(
+      MutableConfigurationProvider provider, CapacityScheduler scheduler,
+      SchedConfUpdateInfo mutationInfo) throws Exception {
+    long configVersion = provider.getConfigVersion();
+    Configuration current = provider.getConfiguration();
+    CapacitySchedulerConfiguration currentCapacityConfiguration =
+        current instanceof CapacitySchedulerConfiguration
+            ? (CapacitySchedulerConfiguration) current
+            : new CapacitySchedulerConfiguration(current, false);
+    Configuration proposed = provider.applyChanges(current, mutationInfo);
+    CapacitySchedulerConfiguration capacityConfiguration =
+        proposed instanceof CapacitySchedulerConfiguration
+            ? (CapacitySchedulerConfiguration) proposed
+            : new CapacitySchedulerConfiguration(proposed, false);
+    ValidationResult result = new CSConfigValidationEngine().validate(
+        capacityConfiguration.getModel(), ClusterFacts.capture(scheduler,
+            currentCapacityConfiguration.getModel()));
+    return new ProposedValidation(capacityConfiguration, result,
+        configVersion);
+  }
+
+  private static String formatValidationIssue(ValidationIssue issue) {
+    return (issue.getQueuePath() == null ? "configuration"
+        : issue.getQueuePath().getFullPath()) + ": " + issue.getMessage();
+  }
+
+  private static String joinErrorIssues(ValidationResult result) {
+    return result.getIssues().stream()
+        .filter(issue -> issue.getSeverity() == ValidationIssue.Severity.ERROR)
+        .map(RMWebServices::formatValidationIssue)
+        .collect(Collectors.joining("\n"));
+  }
+
+  private static final class ProposedValidation {
+    private final CapacitySchedulerConfiguration configuration;
+    private final ValidationResult result;
+    private final long configVersion;
+
+    private ProposedValidation(CapacitySchedulerConfiguration configuration,
+        ValidationResult result, long configVersion) {
+      this.configuration = configuration;
+      this.result = result;
+      this.configVersion = configVersion;
     }
   }
 
@@ -2827,7 +2893,8 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
         callerUGI.doAs((PrivilegedExceptionAction<Void>) () -> {
           MutableConfigurationProvider provider =
               ((MutableConfScheduler) scheduler).getMutableConfProvider();
-          LogMutation logMutation = applyMutation(provider, callerUGI, mutationInfo);
+          LogMutation logMutation = applyMutation(provider, callerUGI,
+              mutationInfo);
           return refreshQueues(provider, logMutation);
         });
       } catch (IOException e) {
@@ -2839,8 +2906,8 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
     }
   }
 
-  private Void refreshQueues(MutableConfigurationProvider provider, LogMutation logMutation)
-      throws Exception {
+  private Void refreshQueues(MutableConfigurationProvider provider,
+      LogMutation logMutation) throws Exception {
     try {
       rm.getRMContext().getRMAdminService().refreshQueues();
     } catch (IOException | YarnException e) {
@@ -2852,14 +2919,14 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
   }
 
   private LogMutation applyMutation(MutableConfigurationProvider provider,
-      UserGroupInformation callerUGI, SchedConfUpdateInfo mutationInfo) throws Exception {
+      UserGroupInformation callerUGI, SchedConfUpdateInfo mutationInfo)
+      throws Exception {
     if (!provider.getAclMutationPolicy().isMutationAllowed(callerUGI,
         mutationInfo)) {
       throw new org.apache.hadoop.security.AccessControlException("User"
           + " is not admin of all modified queues.");
     }
-    return provider.logAndApplyMutation(callerUGI,
-        mutationInfo);
+    return provider.logAndApplyMutation(callerUGI, mutationInfo);
   }
 
   private boolean isConfigurationMutable(ResourceScheduler scheduler) {

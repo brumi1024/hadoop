@@ -500,6 +500,7 @@
             <exclude>src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/placement/schema/Rule.java</exclude>
             <exclude>src/test/resources/webapp/*.json</exclude>
             <exclude>src/test/resources/webapp/*.xml</exclude>
+            <exclude>src/test/resources/webapp/conf-validate-*.txt</exclude>
           </excludes>
         </configuration>
       </plugin>

@@ -1,0 +1,1 @@
+CapacityScheduler configuration validation failed:java.io.IOException: root.a: Invalid capacity value 'not-a-capacity'

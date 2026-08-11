@@ -313,7 +313,7 @@ public final class TestWebServiceUtil {
     // somehow does not load the queues properly and falls back to default config.
     // Therefore CS will think there's only the default queue there.
     CapacityScheduler cs = (CapacityScheduler) rm.getResourceScheduler();
-    cs.reinitialize(conf, rm.getRMContext(), true);
+    cs.reinitialize(conf, rm.getRMContext());
   }
 
   public static File getCapacitySchedulerConfigFileInTarget() {

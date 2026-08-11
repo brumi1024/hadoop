@@ -97,6 +97,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fifo.FifoSchedule
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ApplicationSubmissionContextInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.AppsInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ClusterUserInfo;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ValidationResultInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.jsonprovider.JsonProviderFeature;
 import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
 import org.apache.hadoop.yarn.util.AdHocLogDumper;
@@ -1041,6 +1042,52 @@ public class TestRMWebServices extends JerseyTestBase {
     Response response = webService
         .validateAndGetSchedulerConfiguration(mutationInfo, mockHsr);
     assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+  }
+
+  @Test
+  public void testStructuredSchedulerConfigurationValidation() throws Exception {
+    Configuration config = CapacitySchedulerConfigGeneratorForTest
+        .createBasicCSConfiguration();
+    ResourceScheduler scheduler = prepareCSForValidation(config);
+    MutableCSConfigurationProvider provider =
+        (MutableCSConfigurationProvider) ((CapacityScheduler) scheduler)
+            .getMutableConfProvider();
+    when(provider.getConfigVersion()).thenReturn(17L);
+
+    RMWebServices webService = prepareWebServiceForValidation(scheduler);
+    Response response = webService.validateSchedulerConfigurationStructured(
+        new SchedConfUpdateInfo(), prepareServletRequestForValidation());
+
+    assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+    ValidationResultInfo result = (ValidationResultInfo) response.getEntity();
+    assertTrue(result.isValid());
+    assertEquals(17L, result.getConfigVersion());
+    assertTrue(result.getIssues().isEmpty());
+  }
+
+  @Test
+  public void testStructuredSchedulerConfigurationValidationError()
+      throws Exception {
+    Configuration config = CapacitySchedulerConfigGeneratorForTest
+        .createBasicCSConfiguration();
+    ResourceScheduler scheduler = prepareCSForValidation(config);
+    SchedConfUpdateInfo mutation = new SchedConfUpdateInfo();
+    mutation.getRemoveQueueInfo().add("root.test1");
+    Map<String, String> propertiesToUpdate = new HashMap<>();
+    propertiesToUpdate.put("capacity", "100");
+    mutation.getUpdateQueueInfo().add(
+        new QueueConfigInfo("root.test2", propertiesToUpdate));
+
+    RMWebServices webService = prepareWebServiceForValidation(scheduler);
+    Response response = webService.validateSchedulerConfigurationStructured(
+        mutation, prepareServletRequestForValidation());
+
+    assertEquals(Response.Status.BAD_REQUEST.getStatusCode(),
+        response.getStatus());
+    ValidationResultInfo result = (ValidationResultInfo) response.getEntity();
+    assertFalse(result.isValid());
+    assertTrue(result.getIssues().stream().anyMatch(issue ->
+        "queue-deletion-requires-stopped".equals(issue.getRuleId())));
   }
 
   private CapacityScheduler prepareCSForValidation(Configuration config)

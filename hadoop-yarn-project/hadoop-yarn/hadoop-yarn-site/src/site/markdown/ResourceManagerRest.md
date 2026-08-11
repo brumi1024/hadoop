@@ -8313,6 +8313,97 @@ Response Header:
 
 ```yarn rmadmin -removeFromClusterNodeLabels x```
 
+Scheduler Configuration Validation API
+--------------------------------------
+
+The validation APIs apply a proposed mutation without storing or activating it.
+They are available only when the Capacity Scheduler uses a mutable configuration provider, and they require the same administrator access as scheduler configuration mutation.
+
+The legacy endpoint is retained for compatibility:
+
+      POST http://rm-http-address:port/ws/v1/cluster/scheduler-conf/validate
+
+It returns the proposed configuration on success and a plain error message with status `400` on failure.
+New clients should use the structured v2 endpoint:
+
+      POST http://rm-http-address:port/ws/v1/cluster/scheduler-conf/validate/v2
+
+The request body is the same `sched-conf` mutation document accepted by `PUT /scheduler-conf`.
+The v2 endpoint returns status `200` for valid proposals, including proposals with warnings, and status `400` for proposals containing errors.
+The response contains the configuration-store version that was validated, so a client can detect a concurrent change before submitting the mutation.
+
+Queue path components must be nonempty.
+Portable queue names use only ASCII letters, digits, `_`, and `-`.
+Other Unicode characters are accepted with a warning.
+An embedded dot in a queue-list component is rejected with an error because it
+would silently change the queue hierarchy.
+
+Example valid response with a warning:
+
+```json
+{
+  "validationResult": {
+    "valid": true,
+    "configVersion": 12,
+    "issues": {
+      "issue": [
+        {
+          "queuePath": "root.wéird",
+          "ruleId": "queue-name",
+          "severity": "WARNING",
+          "message": "Queue name component 'wéird' contains characters outside [a-zA-Z0-9_-]"
+        }
+      ]
+    }
+  }
+}
+```
+
+Example error issue:
+
+```json
+{
+  "validationResult": {
+    "valid": false,
+    "configVersion": 12,
+    "issues": {
+      "issue": [
+        {
+          "propertyKey": "yarn.scheduler.minimum-allocation-mb",
+          "ruleId": "memory-allocation",
+          "severity": "ERROR",
+          "message": "Invalid integer value 'not-an-integer' for yarn.scheduler.minimum-allocation-mb"
+        }
+      ]
+    }
+  }
+}
+```
+
+An embedded-dot queue-list component is an error.  For example, a proposal
+containing `root.queues=a,b.c` returns status `400` with an issue like this:
+
+```json
+{
+  "validationResult": {
+    "valid": false,
+    "configVersion": 12,
+    "issues": {
+      "issue": [
+        {
+          "propertyKey": "yarn.scheduler.capacity.root.queues",
+          "ruleId": "queue-name",
+          "severity": "ERROR",
+          "message": "Queue list component 'b.c' contains an embedded dot"
+        }
+      ]
+    }
+  }
+}
+```
+
+Nullable `queuePath` and `propertyKey` fields are omitted from XML and may be omitted from JSON for scheduler-wide issues.
+
 
 Cluster Container Signal API
 --------------------------------
