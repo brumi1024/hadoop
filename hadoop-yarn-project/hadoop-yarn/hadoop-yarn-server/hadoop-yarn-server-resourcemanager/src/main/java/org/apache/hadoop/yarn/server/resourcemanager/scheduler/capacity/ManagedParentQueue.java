@@ -54,7 +54,7 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
   private static final Logger LOG = LoggerFactory.getLogger(
       ManagedParentQueue.class);
 
-  public ManagedParentQueue(final CapacitySchedulerQueueContext queueContext,
+  public ManagedParentQueue(final QueueBuildContext queueContext,
       final String queueName, final CSQueue parent, final CSQueue old)
       throws IOException {
     super(queueContext, queueName, parent, old);

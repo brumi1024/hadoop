@@ -31,12 +31,12 @@ public class LeafQueue extends AbstractLeafQueue {
   private static final Logger LOG =
       LoggerFactory.getLogger(LeafQueue.class);
 
-  public LeafQueue(CapacitySchedulerQueueContext queueContext,
+  public LeafQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
-  public LeafQueue(CapacitySchedulerQueueContext queueContext,
+  public LeafQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic) throws
       IOException {
     super(queueContext, queueName, parent, old, isDynamic);

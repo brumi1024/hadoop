@@ -43,7 +43,7 @@ public abstract class AbstractManagedParentQueue extends AbstractParentQueue {
   protected AutoCreatedLeafQueueConfig leafQueueTemplate;
   protected AutoCreatedQueueManagementPolicy queueManagementPolicy = null;
 
-  public AbstractManagedParentQueue(CapacitySchedulerQueueContext queueContext,
+  public AbstractManagedParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
     super(queueContext, queueName, parent, old);
   }

@@ -124,7 +124,7 @@ public abstract class AbstractCSQueue implements CSQueue {
 
   private final RecordFactory recordFactory =
       RecordFactoryProvider.getRecordFactory(null);
-  protected CapacitySchedulerQueueContext queueContext;
+  protected QueueBuildContext queueContext;
   private final CapacitySchedulerQueueContext liveContext;
   private volatile QueueConfigNode configNode;
 
@@ -144,8 +144,7 @@ public abstract class AbstractCSQueue implements CSQueue {
   // is it a dynamic queue?
   private boolean dynamicQueue = false;
 
-  public AbstractCSQueue(CapacitySchedulerQueueContext queueContext,
-      String queueName,
+  public AbstractCSQueue(QueueBuildContext queueContext, String queueName,
       CSQueue parent, CSQueue old) {
     this.parent = parent;
     this.queuePath = createQueuePath(parent, queueName);

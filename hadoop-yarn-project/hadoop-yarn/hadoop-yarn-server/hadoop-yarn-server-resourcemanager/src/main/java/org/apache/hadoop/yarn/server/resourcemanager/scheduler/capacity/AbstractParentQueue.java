@@ -108,13 +108,13 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
   private final Map<String, Map<String, Float>> effectiveMinResourceRatio =
       new ConcurrentHashMap<>();
 
-  public AbstractParentQueue(CapacitySchedulerQueueContext queueContext,
+  public AbstractParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old)
       throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
-  public AbstractParentQueue(CapacitySchedulerQueueContext queueContext,
+  public AbstractParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic) throws
       IOException {
 

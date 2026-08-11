@@ -33,12 +33,12 @@ public class ParentQueue extends AbstractParentQueue {
   private static final Logger LOG =
       LoggerFactory.getLogger(ParentQueue.class);
 
-  public ParentQueue(CapacitySchedulerQueueContext queueContext,
+  public ParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
-  public ParentQueue(CapacitySchedulerQueueContext queueContext,
+  public ParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic)
       throws IOException {
     super(queueContext, queueName, parent, old, isDynamic);

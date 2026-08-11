@@ -155,12 +155,12 @@ public class AbstractLeafQueue extends AbstractCSQueue {
   private final List<FiCaSchedulerApp> runnableApps = new ArrayList<>();
   private final List<FiCaSchedulerApp> nonRunnableApps = new ArrayList<>();
 
-  public AbstractLeafQueue(CapacitySchedulerQueueContext queueContext,
+  public AbstractLeafQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
-  public AbstractLeafQueue(CapacitySchedulerQueueContext queueContext,
+  public AbstractLeafQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic) throws
       IOException {
     super(queueContext, queueName, parent, old);

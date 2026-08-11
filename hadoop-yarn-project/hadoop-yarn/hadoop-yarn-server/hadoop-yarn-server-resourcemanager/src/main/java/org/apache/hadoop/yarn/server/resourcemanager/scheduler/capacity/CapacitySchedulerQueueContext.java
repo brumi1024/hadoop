@@ -30,6 +30,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.mod
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerApp;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerNode;
 import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
+import org.apache.hadoop.ha.HAServiceProtocol;
 import org.apache.hadoop.conf.Configuration;
 
 /**
@@ -37,7 +38,7 @@ import org.apache.hadoop.conf.Configuration;
  * to necessary manager classes or the global CapacityScheduler
  * configuration.
  */
-public class CapacitySchedulerQueueContext {
+public class CapacitySchedulerQueueContext implements QueueBuildContext {
 
   // Manager classes
   private final CapacitySchedulerContext csContext;
@@ -76,6 +77,7 @@ public class CapacitySchedulerQueueContext {
     return queueManager;
   }
 
+  @Override
   public ConfiguredNodeLabels getConfiguredNodeLabelsForAllQueues() {
     return queueManager.getConfiguredNodeLabelsForAllQueues();
   }
@@ -104,6 +106,14 @@ public class CapacitySchedulerQueueContext {
     return configuration.getModel();
   }
 
+  @Override
+  public boolean isHierarchyValidationSkipped() {
+    return csContext.isConfigurationMutable()
+        && csContext.getRMContext().getHAServiceState()
+            == HAServiceProtocol.HAServiceState.STANDBY;
+  }
+
+  @Override
   public CSQueueMetrics createQueueMetrics(QueuePath queuePath,
       CSQueue parent, boolean enableUserMetrics,
       Configuration metricsConfiguration) {
