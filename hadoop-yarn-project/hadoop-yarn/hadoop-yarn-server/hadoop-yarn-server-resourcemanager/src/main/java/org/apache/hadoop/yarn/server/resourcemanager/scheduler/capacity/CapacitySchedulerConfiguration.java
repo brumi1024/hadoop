@@ -23,11 +23,14 @@ import org.apache.hadoop.thirdparty.com.google.common.base.Strings;
 import org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableSet;
 import org.apache.hadoop.yarn.server.resourcemanager.placement.csmappingrule.MappingRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.QueueCapacityConfigParser;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModelBuilder;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.placement.MappingRuleCreator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.security.authorize.AccessControlList;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
@@ -63,7 +66,10 @@ import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
 import org.apache.hadoop.yarn.util.resource.ResourceUtils;
 import org.apache.hadoop.yarn.util.resource.Resources;
 
+import java.io.DataInput;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -73,7 +79,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -435,7 +443,19 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
   private static final String LEGACY_QUEUE_MODE_ENABLED = PREFIX + "legacy-queue-mode.enabled";
   public static final boolean DEFAULT_LEGACY_QUEUE_MODE = true;
 
-  private ConfigurationProperties configurationProperties;
+  private final AtomicLong mutationEpoch = new AtomicLong();
+  private volatile ModelRef modelRef;
+  private volatile boolean reloadPending;
+
+  private static final class ModelRef {
+    private final long epoch;
+    private final CSConfigModel model;
+
+    private ModelRef(long epoch, CSConfigModel model) {
+      this.epoch = epoch;
+      this.model = model;
+    }
+  }
 
   public static QueueCapacityConfigParser getQueueCapacityConfigParser() {
     return queueCapacityConfigParser;
@@ -474,9 +494,172 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
   public CapacitySchedulerConfiguration(Configuration configuration,
       boolean useLocalConfigurationProvider) {
     super(configuration);
+    if (configuration instanceof CapacitySchedulerConfiguration
+        && !useLocalConfigurationProvider) {
+      CapacitySchedulerConfiguration source =
+          (CapacitySchedulerConfiguration) configuration;
+      mutationEpoch.set(source.mutationEpoch.get());
+      modelRef = source.getOrBuildModelRef();
+    }
     if (useLocalConfigurationProvider) {
       addResource(CS_CONFIGURATION_FILE);
     }
+  }
+
+  private void recordMutation() {
+    mutationEpoch.incrementAndGet();
+  }
+
+  private ModelRef getOrBuildModelRef() {
+    ModelRef current = modelRef;
+    if (current != null && current.epoch == mutationEpoch.get()) {
+      return current;
+    }
+    synchronized (this) {
+      current = modelRef;
+      if (current == null || current.epoch != mutationEpoch.get()) {
+        Map<String, String> properties = new HashMap<>();
+        for (Map.Entry<Object, Object> entry : getProps().entrySet()) {
+          properties.put((String) entry.getKey(), (String) entry.getValue());
+        }
+        current = new ModelRef(mutationEpoch.get(),
+            CSConfigModelBuilder.build(properties));
+        modelRef = current;
+      }
+      return current;
+    }
+  }
+
+  /**
+   * Returns the immutable parsed view for the current mutation epoch.
+   * Runtime calls to {@link Configuration#addDeprecations} are deliberately
+   * unsupported for scheduler configuration snapshots because Hadoop's
+   * deprecation context is private and cannot be observed without reflection.
+   * Deprecation diagnostics are evaluated when this model is built.
+   *
+   * @return current parsed configuration model
+   */
+  public CSConfigModel getModel() {
+    return getOrBuildModelRef().model;
+  }
+
+  @Override
+  public void set(String name, String value, String source) {
+    super.set(name, value, source);
+    recordMutation();
+  }
+
+  @Override
+  public synchronized void unset(String name) {
+    super.unset(name);
+    recordMutation();
+  }
+
+  @Override
+  public synchronized void setIfUnset(String name, String value) {
+    super.setIfUnset(name, value);
+  }
+
+  @Override
+  public void addResource(String name) {
+    super.addResource(name);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(String name, boolean restrictedParser) {
+    super.addResource(name, restrictedParser);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(URL url) {
+    super.addResource(url);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(URL url, boolean restrictedParser) {
+    super.addResource(url, restrictedParser);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(Path file) {
+    super.addResource(file);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(Path file, boolean restrictedParser) {
+    super.addResource(file, restrictedParser);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(InputStream in) {
+    super.addResource(in);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(InputStream in, boolean restrictedParser) {
+    super.addResource(in, restrictedParser);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(InputStream in, String name) {
+    super.addResource(in, name);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(InputStream in, String name,
+      boolean restrictedParser) {
+    super.addResource(in, name, restrictedParser);
+    recordMutation();
+  }
+
+  @Override
+  public void addResource(Configuration conf) {
+    super.addResource(conf);
+    recordMutation();
+  }
+
+  @Override
+  public synchronized void reloadConfiguration() {
+    super.reloadConfiguration();
+    reloadPending = true;
+    recordMutation();
+  }
+
+  @Override
+  protected synchronized Properties getProps() {
+    Properties properties = super.getProps();
+    if (reloadPending) {
+      reloadPending = false;
+      recordMutation();
+    }
+    return properties;
+  }
+
+  @Override
+  public void clear() {
+    super.clear();
+    recordMutation();
+  }
+
+  @Override
+  public void readFields(DataInput in) throws IOException {
+    super.readFields(in);
+    recordMutation();
+  }
+
+  @Override
+  public void setDeprecatedProperties() {
+    super.setDeprecatedProperties();
+    recordMutation();
   }
 
   static String getUserPrefix(String user) {
@@ -1205,11 +1388,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
    * @return configuration properties
    */
   public ConfigurationProperties getConfigurationProperties() {
-    if (configurationProperties == null) {
-      reinitializeConfigurationProperties();
-    }
-
-    return configurationProperties;
+    return getModel().getRawSnapshot();
   }
 
   /**
@@ -1217,9 +1396,8 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
    */
   @SuppressWarnings({"unchecked", "rawtypes"})
   public void reinitializeConfigurationProperties() {
-    // Props are always Strings, therefore this cast is safe
-    Map<String, String> props = (Map) getProps();
-    configurationProperties = new ConfigurationProperties(props);
+    recordMutation();
+    getModel();
   }
 
   public void setQueueMaximumAllocationMb(QueuePath queue, int value) {
