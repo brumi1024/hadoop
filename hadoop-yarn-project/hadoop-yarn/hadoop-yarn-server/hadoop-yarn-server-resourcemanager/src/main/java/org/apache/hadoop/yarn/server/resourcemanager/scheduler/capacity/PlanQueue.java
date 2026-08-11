@@ -44,7 +44,12 @@ public class PlanQueue extends AbstractManagedParentQueue {
   private float userLimitFactor;
   private boolean showReservationsAsQueues;
 
-  public PlanQueue(CapacitySchedulerQueueContext queueContext, String queueName,
+  public PlanQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName, CSQueue parent, CSQueue old) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public PlanQueue(QueueBuildContext queueContext, String queueName,
       CSQueue parent, CSQueue old) throws IOException {
     super(queueContext, queueName, parent, old);
     super.setupQueueConfigs(queueContext.getClusterResource());

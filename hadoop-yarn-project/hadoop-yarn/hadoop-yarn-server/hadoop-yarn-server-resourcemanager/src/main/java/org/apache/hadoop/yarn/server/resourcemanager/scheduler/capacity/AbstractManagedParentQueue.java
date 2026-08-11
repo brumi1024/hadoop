@@ -43,7 +43,13 @@ public abstract class AbstractManagedParentQueue extends AbstractParentQueue {
   protected AutoCreatedLeafQueueConfig leafQueueTemplate;
   protected AutoCreatedQueueManagementPolicy queueManagementPolicy = null;
 
-  public AbstractManagedParentQueue(CapacitySchedulerQueueContext queueContext,
+  public AbstractManagedParentQueue(
+      CapacitySchedulerQueueContext queueContext, String queueName,
+      CSQueue parent, CSQueue old) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public AbstractManagedParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
     super(queueContext, queueName, parent, old);
   }
@@ -122,7 +128,7 @@ public abstract class AbstractManagedParentQueue extends AbstractParentQueue {
     CSQueue childQueue;
     writeLock.lock();
     try {
-      childQueue = queueContext.getQueueManager().getQueue(childQueueName);
+      childQueue = getQueueContext().getQueueManager().getQueue(childQueueName);
       if (childQueue != null) {
         removeChildQueue(childQueue);
       } else {

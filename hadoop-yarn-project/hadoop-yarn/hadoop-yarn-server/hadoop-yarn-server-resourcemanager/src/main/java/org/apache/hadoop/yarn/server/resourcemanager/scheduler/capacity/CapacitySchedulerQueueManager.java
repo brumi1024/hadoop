@@ -233,7 +233,7 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
    * @throws IOException
    */
   static CSQueue parseQueue(
-      CapacitySchedulerQueueContext queueContext, CapacitySchedulerConfiguration conf,
+      QueueBuildContext queueContext, CapacitySchedulerConfiguration conf,
       CSQueue parent, String queueName, CSQueueStore newQueues, CSQueueStore oldQueues,
       QueueHook hook) throws IOException {
     CSQueue queue;
@@ -298,6 +298,21 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
 
     LOG.info("Initialized queue: " + queueToParse.getFullPath());
     return queue;
+  }
+
+  /**
+   * Builds an isolated queue tree for configuration validation.
+   * @param context validation build context
+   * @param conf proposed scheduler configuration
+   * @return the proposed root queue
+   * @throws IOException when queue construction rejects the configuration
+   */
+  public static CSQueue buildQueueTreeForValidation(QueueBuildContext context,
+      CapacitySchedulerConfiguration conf) throws IOException {
+    CSQueueStore queues = new CSQueueStore();
+    return parseQueue(context, conf, null,
+        CapacitySchedulerConfiguration.ROOT, queues, new CSQueueStore(),
+        NOOP);
   }
 
   /**

@@ -40,7 +40,13 @@ public class AbstractAutoCreatedLeafQueue extends AbstractLeafQueue {
 
   protected AbstractManagedParentQueue parent;
 
-  public AbstractAutoCreatedLeafQueue(CapacitySchedulerQueueContext queueContext,
+  public AbstractAutoCreatedLeafQueue(
+      CapacitySchedulerQueueContext queueContext, String queueName,
+      AbstractManagedParentQueue parent, CSQueue old) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public AbstractAutoCreatedLeafQueue(QueueBuildContext queueContext,
       String queueName, AbstractManagedParentQueue parent, CSQueue old)
       throws IOException {
     super(queueContext, queueName, parent, old);

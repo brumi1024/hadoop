@@ -35,8 +35,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.AUTO_CREATED_LEAF_QUEUE_TEMPLATE_PREFIX;
 import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.getQueueCapacityConfigParser;
 
 /**
@@ -54,7 +56,14 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
   private static final Logger LOG = LoggerFactory.getLogger(
       ManagedParentQueue.class);
 
-  public ManagedParentQueue(final CapacitySchedulerQueueContext queueContext,
+  public ManagedParentQueue(
+      final CapacitySchedulerQueueContext queueContext,
+      final String queueName, final CSQueue parent, final CSQueue old)
+      throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public ManagedParentQueue(final QueueBuildContext queueContext,
       final String queueName, final CSQueue parent, final CSQueue old)
       throws IOException {
     super(queueContext, queueName, parent, old);
@@ -509,6 +518,16 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
         childQueueToBeUpdated.reinitializeFromTemplate(
             queueManagementChange.getUpdatedQueueTemplate());
       }
+    }
+  }
+
+  public void setLeafQueueConfigs(String leafQueueName) {
+    CapacitySchedulerConfiguration templateConfig =
+        leafQueueTemplate.getLeafQueueConfigs();
+    for (Map.Entry<String, String> entry : templateConfig) {
+      String name = entry.getKey().replaceFirst(
+          AUTO_CREATED_LEAF_QUEUE_TEMPLATE_PREFIX, leafQueueName);
+      getQueueContext().setConfigurationEntry(name, entry.getValue());
     }
   }
 

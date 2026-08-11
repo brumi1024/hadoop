@@ -157,10 +157,21 @@ public class AbstractLeafQueue extends AbstractCSQueue {
 
   public AbstractLeafQueue(CapacitySchedulerQueueContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public AbstractLeafQueue(QueueBuildContext queueContext,
+      String queueName, CSQueue parent, CSQueue old) throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
   public AbstractLeafQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName, CSQueue parent, CSQueue old, boolean isDynamic)
+      throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old, isDynamic);
+  }
+
+  public AbstractLeafQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic) throws
       IOException {
     super(queueContext, queueName, parent, old);
@@ -2017,7 +2028,7 @@ public class AbstractLeafQueue extends AbstractCSQueue {
       return;
     }
 
-    queueContext.getQueueManager().getQueueCapacityHandler()
+    getQueueContext().getQueueManager().getQueueCapacityHandler()
         .updateChildren(clusterResource, getParent());
   }
 

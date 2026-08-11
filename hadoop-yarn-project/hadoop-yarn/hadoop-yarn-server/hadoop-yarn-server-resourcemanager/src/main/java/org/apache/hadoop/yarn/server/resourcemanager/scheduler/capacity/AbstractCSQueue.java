@@ -124,7 +124,8 @@ public abstract class AbstractCSQueue implements CSQueue {
 
   private final RecordFactory recordFactory =
       RecordFactoryProvider.getRecordFactory(null);
-  protected CapacitySchedulerQueueContext queueContext;
+  @SuppressWarnings("checkstyle:visibilitymodifier")
+  protected QueueBuildContext queueContext;
   private final CapacitySchedulerQueueContext liveContext;
   private volatile QueueConfigNode configNode;
 
@@ -145,7 +146,11 @@ public abstract class AbstractCSQueue implements CSQueue {
   private boolean dynamicQueue = false;
 
   public AbstractCSQueue(CapacitySchedulerQueueContext queueContext,
-      String queueName,
+      String queueName, CSQueue parent, CSQueue old) {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public AbstractCSQueue(QueueBuildContext queueContext, String queueName,
       CSQueue parent, CSQueue old) {
     this.parent = parent;
     this.queuePath = createQueuePath(parent, queueName);
@@ -154,7 +159,8 @@ public abstract class AbstractCSQueue implements CSQueue {
     this.liveContext = queueContext instanceof CapacitySchedulerQueueContext
         ? (CapacitySchedulerQueueContext) queueContext : null;
     this.resourceCalculator = queueContext.getResourceCalculator();
-    this.activitiesManager = queueContext.getActivitiesManager();
+    this.activitiesManager = liveContext == null
+        ? null : liveContext.getActivitiesManager();
     this.labelManager = queueContext.getLabelManager();
 
     // must be called after parent and queueName is set
@@ -393,7 +399,7 @@ public abstract class AbstractCSQueue implements CSQueue {
       configuredLabels.add(NO_LABEL);
       if (queuePath.isRoot()) {
         configuredLabels.addAll(
-            queueContext.getConfigModel().getConfiguredNodeLabels(queuePath));
+            queueContext.getConfigModel().getConfiguredNodeLabelsForAllQueues());
       }
       // Collect and set the Node label configuration
       this.queueNodeLabelsSettings = new QueueNodeLabelsSettings(queueNode,

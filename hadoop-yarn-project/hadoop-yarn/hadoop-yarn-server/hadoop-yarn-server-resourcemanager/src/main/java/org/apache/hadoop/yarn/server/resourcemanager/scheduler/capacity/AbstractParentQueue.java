@@ -109,12 +109,23 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
       new ConcurrentHashMap<>();
 
   public AbstractParentQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName, CSQueue parent, CSQueue old) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public AbstractParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old)
       throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
   public AbstractParentQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName, CSQueue parent, CSQueue old, boolean isDynamic)
+      throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old, isDynamic);
+  }
+
+  public AbstractParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic) throws
       IOException {
 
@@ -529,7 +540,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
 
       // Now we can do remove and update
       this.childQueues.remove(queue);
-      queueContext.getQueueManager()
+      getQueueContext().getQueueManager()
           .removeQueue(queue.getQueuePath());
 
       // Call updateClusterResource,
@@ -627,7 +638,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
             currentChildQueues.put(newChildQueueName, newChildQueue);
             // inform CapacitySchedulerQueueManager
             CapacitySchedulerQueueManager queueManager =
-                queueContext.getQueueManager();
+                getQueueContext().getQueueManager();
             queueManager.addQueue(newChildQueueName, newChildQueue);
             continue;
           }
@@ -1173,7 +1184,7 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
     }
 
     CapacitySchedulerQueueCapacityHandler handler =
-        queueContext.getQueueManager().getQueueCapacityHandler();
+        getQueueContext().getQueueManager().getQueueCapacityHandler();
     if (rootQueue) {
       handler.updateRoot(this, clusterResource);
       handler.updateChildren(clusterResource, this);

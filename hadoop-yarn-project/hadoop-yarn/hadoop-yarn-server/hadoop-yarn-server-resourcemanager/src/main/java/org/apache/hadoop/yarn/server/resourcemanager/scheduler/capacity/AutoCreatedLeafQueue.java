@@ -43,7 +43,11 @@ public class AutoCreatedLeafQueue extends AbstractAutoCreatedLeafQueue {
       .getLogger(AutoCreatedLeafQueue.class);
 
   public AutoCreatedLeafQueue(CapacitySchedulerQueueContext queueContext,
-      String queueName,
+      String queueName, ManagedParentQueue parent) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent);
+  }
+
+  public AutoCreatedLeafQueue(QueueBuildContext queueContext, String queueName,
       ManagedParentQueue parent) throws IOException {
     super(queueContext, queueName, parent, null);
     super.setupQueueConfigs(queueContext.getClusterResource());

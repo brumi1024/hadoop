@@ -33,10 +33,21 @@ public class LeafQueue extends AbstractLeafQueue {
 
   public LeafQueue(CapacitySchedulerQueueContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public LeafQueue(QueueBuildContext queueContext,
+      String queueName, CSQueue parent, CSQueue old) throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
   public LeafQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName, CSQueue parent, CSQueue old, boolean isDynamic)
+      throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old, isDynamic);
+  }
+
+  public LeafQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic) throws
       IOException {
     super(queueContext, queueName, parent, old, isDynamic);

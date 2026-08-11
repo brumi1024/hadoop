@@ -35,10 +35,21 @@ public class ParentQueue extends AbstractParentQueue {
 
   public ParentQueue(CapacitySchedulerQueueContext queueContext,
       String queueName, CSQueue parent, CSQueue old) throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old);
+  }
+
+  public ParentQueue(QueueBuildContext queueContext,
+      String queueName, CSQueue parent, CSQueue old) throws IOException {
     this(queueContext, queueName, parent, old, false);
   }
 
   public ParentQueue(CapacitySchedulerQueueContext queueContext,
+      String queueName, CSQueue parent, CSQueue old, boolean isDynamic)
+      throws IOException {
+    this((QueueBuildContext) queueContext, queueName, parent, old, isDynamic);
+  }
+
+  public ParentQueue(QueueBuildContext queueContext,
       String queueName, CSQueue parent, CSQueue old, boolean isDynamic)
       throws IOException {
     super(queueContext, queueName, parent, old, isDynamic);
@@ -64,7 +75,7 @@ public class ParentQueue extends AbstractParentQueue {
       // should not happen, since it will be handled before calling this method)
       // , but we will move on.
       CSQueue queue =
-          queueContext.getQueueManager().getQueueByFullName(
+          getQueueContext().getQueueManager().getQueueByFullName(
               childQueuePath);
       if (queue != null) {
         LOG.warn(
