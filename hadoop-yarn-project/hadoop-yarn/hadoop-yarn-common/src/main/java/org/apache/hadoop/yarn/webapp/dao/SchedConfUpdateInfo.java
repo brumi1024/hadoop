@@ -47,6 +47,8 @@ public class SchedConfUpdateInfo {
   @XmlElement(name = "subClusterId")
   private String subClusterId = "";
 
+  private Long configVersion;
+
   private HashMap<String, String> global = new HashMap<>();
 
   public SchedConfUpdateInfo() {
@@ -92,5 +94,13 @@ public class SchedConfUpdateInfo {
 
   public void setSubClusterId(String subClusterId) {
     this.subClusterId = subClusterId;
+  }
+
+  public Long getConfigVersion() {
+    return configVersion;
+  }
+
+  public void setConfigVersion(Long configVersion) {
+    this.configVersion = configVersion;
   }
 }

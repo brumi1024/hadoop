@@ -48,6 +48,9 @@ public final class RMWSConsts {
   /** Path for {@code RMWebServices#updateSchedulerConfiguration}. */
   public static final String SCHEDULER_CONF = "/scheduler-conf";
 
+  /** Path for version-checked scheduler configuration mutations. */
+  public static final String SCHEDULER_CONF_V2 = "/scheduler-conf/v2";
+
   /** Path for {@code RMWebServices#formatSchedulerConfiguration}. */
   public static final String FORMAT_SCHEDULER_CONF = "/scheduler-conf/format";
 

@@ -121,9 +121,10 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.Activi
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.ActivityState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.AllocationState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.CSConfigurationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.PlacementRuleDuplicatesRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.FileBasedCSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.MutableCSConfigurationProvider;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.KillableContainer;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.PreemptionManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.AssignmentInformation;
@@ -441,53 +442,12 @@ public class CapacityScheduler extends
   }
 
   public void reinitialize(Configuration newConf, RMContext rmContext,
-         boolean validation) throws IOException {
-    writeLock.lock();
-    try {
-      Configuration configuration = new Configuration(newConf);
-      CapacitySchedulerConfiguration oldConf = this.conf;
-      if (validation) {
-        this.conf = new CapacitySchedulerConfiguration(newConf, false);
-      } else {
-        this.conf = csConfProvider.loadConfiguration(configuration);
-      }
-      validateConf(this.conf);
-      try {
-        LOG.info("Re-initializing queues...");
-        refreshMaximumAllocation(
-            ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
-        reinitializeQueues(this.conf);
-      } catch (Throwable t) {
-        this.conf = oldConf;
-        reinitializeQueues(this.conf);
-        refreshMaximumAllocation(
-            ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
-        throw new IOException("Failed to re-init queues : " + t.getMessage(),
-            t);
-      }
-      if (!validation) {
-
-        // update lazy preemption
-        this.isLazyPreemptionEnabled = this.conf.getLazyPreemptionEnabled();
-
-        // Setup how many containers we can allocate for each round
-        assignMultipleEnabled = this.conf.getAssignMultipleEnabled();
-        maxAssignPerHeartbeat = this.conf.getMaxAssignPerHeartbeat();
-        offswitchPerHeartbeatLimit = this.conf.getOffSwitchPerHeartbeatLimit();
-        appShouldFailFast = CapacitySchedulerConfiguration.shouldAppFailFast(
-            getConfig());
-
-        LOG.info("assignMultipleEnabled = " + assignMultipleEnabled + "\n" +
-            "maxAssignPerHeartbeat = " + maxAssignPerHeartbeat + "\n" +
-            "offswitchPerHeartbeatLimit = " + offswitchPerHeartbeatLimit);
-
-        super.reinitialize(newConf, rmContext);
-      }
-      maxRunningEnforcer.updateRunnabilityOnReload();
-    } finally {
-      writeLock.unlock();
-    }
-
+      boolean validation) throws IOException {
+    Configuration configuration = new Configuration(newConf);
+    CapacitySchedulerConfiguration proposed = validation
+        ? new CapacitySchedulerConfiguration(newConf, false)
+        : csConfProvider.loadConfiguration(configuration);
+    activateConfiguration(proposed, rmContext, null);
   }
 
   @Override
@@ -507,6 +467,86 @@ public class CapacityScheduler extends
       return ClusterFacts.capture(this);
     } finally {
       readLock.unlock();
+    }
+  }
+
+  /**
+   * Activates a configuration that was validated by the mutation provider
+   * while holding its serialization lock.
+   * @param proposed proposed scheduler configuration
+   * @param rmContext ResourceManager context
+   * @param validatedFacts facts used for caller validation
+   * @throws IOException when queue replacement fails
+   */
+  @Private
+  public void reinitializePreValidated(
+      CapacitySchedulerConfiguration proposed, RMContext rmContext,
+      ClusterFacts validatedFacts)
+      throws IOException {
+    Preconditions.checkNotNull(proposed);
+    Preconditions.checkNotNull(rmContext);
+    Preconditions.checkNotNull(validatedFacts);
+    activateConfiguration(proposed, rmContext, validatedFacts);
+  }
+
+  private void activateConfiguration(CapacitySchedulerConfiguration proposed,
+      RMContext rmContext, ClusterFacts validatedFacts) throws IOException {
+    writeLock.lock();
+    try {
+      if (validatedFacts != null && !validatedFacts.hasSameQueueTopology(
+          ClusterFacts.capture(this))) {
+        throw new IOException("Queue topology changed after configuration "
+            + "validation");
+      }
+      CapacitySchedulerConfiguration oldConf = this.conf;
+      boolean oldLazyPreemptionEnabled = isLazyPreemptionEnabled;
+      boolean oldAssignMultipleEnabled = assignMultipleEnabled;
+      int oldMaxAssignPerHeartbeat = maxAssignPerHeartbeat;
+      int oldOffswitchPerHeartbeatLimit = offswitchPerHeartbeatLimit;
+      boolean oldAppShouldFailFast = appShouldFailFast;
+      validateConf(proposed);
+      try {
+        this.conf = proposed;
+        LOG.info("Re-initializing queues...");
+        refreshMaximumAllocation(
+            ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
+        reinitializeQueues(this.conf);
+        // update lazy preemption
+        this.isLazyPreemptionEnabled = this.conf.getLazyPreemptionEnabled();
+
+        // Setup how many containers we can allocate for each round
+        assignMultipleEnabled = this.conf.getAssignMultipleEnabled();
+        maxAssignPerHeartbeat = this.conf.getMaxAssignPerHeartbeat();
+        offswitchPerHeartbeatLimit = this.conf.getOffSwitchPerHeartbeatLimit();
+        appShouldFailFast = CapacitySchedulerConfiguration.shouldAppFailFast(
+            getConfig());
+
+        LOG.info("assignMultipleEnabled = " + assignMultipleEnabled + "\n" +
+            "maxAssignPerHeartbeat = " + maxAssignPerHeartbeat + "\n" +
+            "offswitchPerHeartbeatLimit = " + offswitchPerHeartbeatLimit);
+
+        super.reinitialize(proposed, rmContext);
+        maxRunningEnforcer.updateRunnabilityOnReload();
+      } catch (Exception activationFailure) {
+        this.conf = oldConf;
+        this.isLazyPreemptionEnabled = oldLazyPreemptionEnabled;
+        assignMultipleEnabled = oldAssignMultipleEnabled;
+        maxAssignPerHeartbeat = oldMaxAssignPerHeartbeat;
+        offswitchPerHeartbeatLimit = oldOffswitchPerHeartbeatLimit;
+        appShouldFailFast = oldAppShouldFailFast;
+        try {
+          refreshMaximumAllocation(
+              ResourceUtils.fetchMaximumAllocationFromConfig(oldConf));
+          reinitializeQueues(oldConf);
+          super.reinitialize(oldConf, rmContext);
+        } catch (Exception rollbackFailure) {
+          activationFailure.addSuppressed(rollbackFailure);
+        }
+        throw new IOException("Failed to re-init queues : "
+            + activationFailure.getMessage(), activationFailure);
+      }
+    } finally {
+      writeLock.unlock();
     }
   }
 
@@ -767,8 +807,8 @@ public class CapacityScheduler extends
     Collection<String> placementRuleStrs = conf.getStringCollection(
         YarnConfiguration.QUEUE_PLACEMENT_RULES);
     List<PlacementRule> placementRules = new ArrayList<>();
-    Set<String> distinguishRuleSet = CapacitySchedulerConfigValidator
-            .validatePlacementRules(placementRuleStrs);
+    Set<String> distinguishRuleSet =
+        PlacementRuleDuplicatesRule.validateRuleClassNames(placementRuleStrs);
 
     // add UserGroupMappingPlacementRule if empty,default value of
     // yarn.scheduler.queue-placement-rules is user-group

@@ -286,17 +286,17 @@ public class TestZKConfigurationStore extends
         rm1.getResourceScheduler()).getMutableConfProvider();
     UserGroupInformation user = UserGroupInformation
         .createUserForTesting(TEST_USER, new String[0]);
-    LogMutation log = confProvider.logAndApplyMutation(user,
-        schedConfUpdateInfo);
-    rm1.getResourceScheduler().reinitialize(conf1, rm1.getRMContext());
+    confProvider.applyMutation(user, schedConfUpdateInfo);
     assertEquals("val", ((MutableConfScheduler) rm1.getResourceScheduler())
         .getConfiguration().get("key"));
-    confProvider.confirmPendingMutation(log, true);
     assertEquals("val", ((MutableCSConfigurationProvider) confProvider)
         .getConfStore().retrieve().get("key"));
     // Next update is not persisted, it should not be recovered
     schedConfUpdateInfo.getGlobalParams().put("key", "badVal");
-    log = confProvider.logAndApplyMutation(user, schedConfUpdateInfo);
+    Map<String, String> unconfirmed = new HashMap<>();
+    unconfirmed.put("key", "badVal");
+    ((MutableCSConfigurationProvider) confProvider).getConfStore()
+        .logMutation(new LogMutation(unconfirmed, user.getShortUserName()));
 
     // Start RM2 and verifies it starts with updated configuration
     rm2.getRMContext().getRMAdminService().transitionToActive(req);
@@ -379,10 +379,7 @@ public class TestZKConfigurationStore extends
     stopParams.put("capacity", "0");
     QueueConfigInfo stopInfo = new QueueConfigInfo("root.default", stopParams);
     schedConfUpdateInfo.getUpdateQueueInfo().add(stopInfo);
-    LogMutation log = confProvider.logAndApplyMutation(user,
-        schedConfUpdateInfo);
-    rm1.getResourceScheduler().reinitialize(conf1, rm1.getRMContext());
-    confProvider.confirmPendingMutation(log, true);
+    confProvider.applyMutation(user, schedConfUpdateInfo);
     assertTrue(Arrays.asList(((MutableConfScheduler) rm1.getResourceScheduler())
         .getConfiguration().get("yarn.scheduler.capacity.root.queues").split
             (",")).contains("a"));
@@ -391,9 +388,7 @@ public class TestZKConfigurationStore extends
     schedConfUpdateInfo.getUpdateQueueInfo().clear();
     schedConfUpdateInfo.getAddQueueInfo().clear();
     schedConfUpdateInfo.getRemoveQueueInfo().add("root.default");
-    log =  confProvider.logAndApplyMutation(user, schedConfUpdateInfo);
-    rm1.getResourceScheduler().reinitialize(conf1, rm1.getRMContext());
-    confProvider.confirmPendingMutation(log, true);
+    confProvider.applyMutation(user, schedConfUpdateInfo);
     assertEquals("a", ((MutableConfScheduler) rm1.getResourceScheduler())
         .getConfiguration().get("yarn.scheduler.capacity.root.queues"));
 

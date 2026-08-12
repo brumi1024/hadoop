@@ -86,12 +86,16 @@ import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsMana
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfigGeneratorForTest;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.TestCapacitySchedulerConfigValidator;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.MutableCSConfigurationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fifo.FifoScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.ApplicationSubmissionContextInfo;
@@ -1102,8 +1106,29 @@ public class TestRMWebServices extends JerseyTestBase {
 
     when(configurationProvider.getConfiguration()).thenReturn(config);
     when(scheduler.getConf()).thenReturn(config);
+    when(scheduler.captureClusterFacts()).thenReturn(ClusterFacts.empty());
     when(configurationProvider
             .applyChanges(any(), any())).thenCallRealMethod();
+    try {
+      when(configurationProvider.validateMutation(any()))
+          .thenAnswer(invocation -> {
+            SchedConfUpdateInfo mutation = invocation.getArgument(0);
+            CapacitySchedulerConfiguration current =
+                new CapacitySchedulerConfiguration(config, false);
+            CapacitySchedulerConfiguration proposed =
+                new CapacitySchedulerConfiguration(
+                    configurationProvider.applyChanges(current, mutation),
+                    false);
+            ClusterFacts facts = ClusterFacts.capture(scheduler,
+                current.getModel());
+            return new MutableConfigurationProvider.MutationResult(
+                new CSConfigValidationEngine().validate(
+                    proposed.getModel(), facts),
+                configurationProvider.getConfigVersion());
+          });
+    } catch (Exception e) {
+      throw new IOException(e);
+    }
     return scheduler;
   }
 

@@ -29,12 +29,17 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ConfigurationMuta
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ConfigurationMutationACLPolicyFactory;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * CS configuration provider which implements
@@ -47,14 +52,12 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   public static final Logger LOG =
       LoggerFactory.getLogger(MutableCSConfigurationProvider.class);
 
-  private Configuration schedConf;
-  private Configuration oldConf;
+  private volatile ConfigSnapshot current;
   private YarnConfigurationStore confStore;
   private ConfigurationMutationACLPolicy aclMutationPolicy;
   private RMContext rmContext;
 
-  private final ReentrantReadWriteLock formatLock =
-      new ReentrantReadWriteLock();
+  private final ReentrantLock mutationPipelineLock = new ReentrantLock();
 
   public MutableCSConfigurationProvider(RMContext rmContext) {
     this.rmContext = rmContext;
@@ -71,16 +74,16 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   @Override
   public void init(Configuration config) throws IOException {
     this.confStore = YarnConfigurationStoreFactory.getStore(config);
-    initializeSchedConf();
+    CapacitySchedulerConfiguration initial = initialSchedulerConfiguration();
     try {
-      confStore.initialize(config, schedConf, rmContext);
+      confStore.initialize(config, initial, rmContext);
       confStore.checkVersion();
+      // The store may already contain a configuration from an earlier RM.
+      current = new ConfigSnapshot(new CapacitySchedulerConfiguration(
+          confStore.retrieve(), false), confStore.getConfigVersion());
     } catch (Exception e) {
       throw new IOException(e);
     }
-    // After initializing confStore, the store may already have an existing
-    // configuration. Use this one.
-    schedConf = confStore.retrieve();
     this.aclMutationPolicy = ConfigurationMutationACLPolicyFactory
         .getPolicy(config);
     aclMutationPolicy.init(config, rmContext);
@@ -99,19 +102,20 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   @Override
   public CapacitySchedulerConfiguration loadConfiguration(Configuration
       configuration) throws IOException {
-    Configuration loadedConf = new Configuration(schedConf);
+    Configuration loadedConf = new Configuration(current.getConfiguration());
     loadedConf.addResource(configuration);
     return new CapacitySchedulerConfiguration(loadedConf, false);
   }
 
   @Override
   public Configuration getConfiguration() {
-    return new Configuration(schedConf);
+    return new CapacitySchedulerConfiguration(current.getConfiguration(),
+        false);
   }
 
   @Override
   public long getConfigVersion() throws Exception {
-    return confStore.getConfigVersion();
+    return current.getStoreVersion();
   }
 
   @Override
@@ -120,18 +124,101 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   }
 
   @Override
-  public LogMutation logAndApplyMutation(UserGroupInformation user,
+  public MutationResult applyMutation(UserGroupInformation user,
       SchedConfUpdateInfo confUpdate) throws Exception {
-    oldConf = new Configuration(schedConf);
-    CapacitySchedulerConfiguration proposedConf =
-            new CapacitySchedulerConfiguration(schedConf, false);
-    Map<String, String> kvUpdate
-            = ConfigurationUpdateAssembler.constructKeyValueConfUpdate(proposedConf, confUpdate);
-    LogMutation log = new LogMutation(kvUpdate, user.getShortUserName());
-    confStore.logMutation(log);
-    applyMutation(proposedConf, kvUpdate);
-    schedConf = proposedConf;
-    return log;
+    return applyMutation(user, confUpdate, null);
+  }
+
+  @Override
+  public MutationResult applyMutation(UserGroupInformation user,
+      SchedConfUpdateInfo confUpdate, long expectedConfigVersion)
+      throws Exception {
+    return applyMutation(user, confUpdate, Long.valueOf(expectedConfigVersion));
+  }
+
+  private MutationResult applyMutation(UserGroupInformation user,
+      SchedConfUpdateInfo confUpdate, Long expectedConfigVersion)
+      throws Exception {
+    mutationPipelineLock.lock();
+    try {
+      CapacityScheduler scheduler = (CapacityScheduler) rmContext.getScheduler();
+      if (expectedConfigVersion != null
+          && expectedConfigVersion.longValue() != current.getStoreVersion()) {
+        throw new VersionMismatchException(expectedConfigVersion,
+            current.getStoreVersion());
+      }
+      PreparedMutation prepared = prepareMutation(scheduler, confUpdate);
+      if (!prepared.validationResult.isValid()) {
+        return new MutationResult(prepared.validationResult,
+            current.getStoreVersion());
+      }
+
+      LogMutation log = new LogMutation(prepared.changes,
+          user.getShortUserName());
+      boolean activationSucceeded = false;
+      try {
+        confStore.logMutation(log);
+        scheduler.reinitializePreValidated(prepared.configuration, rmContext,
+            prepared.clusterFacts);
+        activationSucceeded = true;
+        confStore.confirmMutation(log, true);
+        current = new ConfigSnapshot(prepared.configuration,
+            confStore.getConfigVersion());
+      } catch (Exception failure) {
+        if (!activationSucceeded) {
+          try {
+            confStore.confirmMutation(log, false);
+          } catch (Exception abortFailure) {
+            failure.addSuppressed(abortFailure);
+          }
+        }
+        reconcileFromStore(scheduler, failure);
+        throw failure;
+      }
+      return new MutationResult(prepared.validationResult,
+          current.getStoreVersion());
+    } finally {
+      mutationPipelineLock.unlock();
+    }
+  }
+
+  @Override
+  public MutationResult validateMutation(SchedConfUpdateInfo confUpdate)
+      throws Exception {
+    mutationPipelineLock.lock();
+    try {
+      PreparedMutation prepared = prepareMutation(
+          (CapacityScheduler) rmContext.getScheduler(), confUpdate);
+      return new MutationResult(prepared.validationResult,
+          current.getStoreVersion());
+    } finally {
+      mutationPipelineLock.unlock();
+    }
+  }
+
+  @Override
+  public void refreshScheduler(Configuration configuration) throws Exception {
+    mutationPipelineLock.lock();
+    try {
+      rmContext.getScheduler().reinitialize(configuration, rmContext);
+    } finally {
+      mutationPipelineLock.unlock();
+    }
+  }
+
+  private PreparedMutation prepareMutation(CapacityScheduler scheduler,
+      SchedConfUpdateInfo confUpdate) throws IOException {
+    CapacitySchedulerConfiguration proposed =
+        new CapacitySchedulerConfiguration(current.getConfiguration(), false);
+    Map<String, String> changes =
+        ConfigurationUpdateAssembler.constructKeyValueConfUpdate(
+            proposed, confUpdate);
+    applyMutation(proposed, changes);
+    CSConfigModel model = proposed.getModel();
+    ClusterFacts facts = scheduler.captureClusterFacts();
+    ValidationResult result = new CSConfigValidationEngine().validate(
+        model, facts);
+    return new PreparedMutation(proposed, changes, facts, result);
   }
 
   public Configuration applyChanges(Configuration oldConfiguration,
@@ -154,70 +241,104 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
     }
   }
 
+  private void reconcileFromStore(CapacityScheduler scheduler,
+      Exception mutationFailure) throws IOException {
+    try {
+      CapacitySchedulerConfiguration durable =
+          new CapacitySchedulerConfiguration(confStore.retrieve(), false);
+      long storeVersion = confStore.getConfigVersion();
+      ClusterFacts durableFacts = scheduler.captureClusterFacts();
+      scheduler.reinitializePreValidated(durable, rmContext, durableFacts);
+      current = new ConfigSnapshot(durable, storeVersion);
+    } catch (Exception reconciliationFailure) {
+      IOException unknownOutcome = new IOException(
+          "Configuration mutation failed and durable state could not be "
+              + "reconciled",
+          mutationFailure);
+      unknownOutcome.addSuppressed(reconciliationFailure);
+      throw unknownOutcome;
+    }
+  }
+
   @Override
   public void formatConfigurationInStore(Configuration config)
       throws Exception {
-    formatLock.writeLock().lock();
+    mutationPipelineLock.lock();
+    ConfigSnapshot beforeFormat = current;
     try {
       confStore.format();
-      oldConf = new Configuration(schedConf);
-      initializeSchedConf();
-      confStore.initialize(config, schedConf, rmContext);
+      CapacitySchedulerConfiguration initial = initialSchedulerConfiguration();
+      confStore.initialize(config, initial, rmContext);
       confStore.checkVersion();
+      current = new ConfigSnapshot(initial, confStore.getConfigVersion());
+      rmContext.getRMAdminService().refreshQueues();
     } catch (Exception e) {
-      throw new IOException(e);
-    } finally {
-      formatLock.writeLock().unlock();
-    }
-  }
-
-  private void initializeSchedConf() {
-    Configuration initialSchedConf = getInitSchedulerConfig();
-    this.schedConf = new Configuration(false);
-    // We need to explicitly set the key-values in schedConf, otherwise
-    // these configuration keys cannot be deleted when
-    // configuration is reloaded.
-    for (Map.Entry<String, String> kv : initialSchedConf) {
-      schedConf.set(kv.getKey(), kv.getValue());
-    }
-  }
-
-  @Override
-  public void revertToOldConfig(Configuration config) throws Exception {
-    formatLock.writeLock().lock();
-    try {
-      schedConf = oldConf;
-      confStore.format();
-      confStore.initialize(config, oldConf, rmContext);
-      confStore.checkVersion();
-    } catch (Exception e) {
-      throw new IOException(e);
-    } finally {
-      formatLock.writeLock().unlock();
-    }
-  }
-
-  @Override
-  public void confirmPendingMutation(LogMutation pendingMutation,
-      boolean isValid) throws Exception {
-    formatLock.readLock().lock();
-    try {
-      confStore.confirmMutation(pendingMutation, isValid);
-      if (!isValid) {
-        schedConf = oldConf;
+      current = beforeFormat;
+      try {
+        confStore.format();
+        confStore.initialize(config, beforeFormat.getConfiguration(),
+            rmContext);
+        confStore.checkVersion();
+        current = new ConfigSnapshot(beforeFormat.getConfiguration(),
+            confStore.getConfigVersion());
+      } catch (Exception restoreFailure) {
+        e.addSuppressed(restoreFailure);
       }
+      throw new IOException(e);
     } finally {
-      formatLock.readLock().unlock();
+      mutationPipelineLock.unlock();
     }
+  }
+
+  private CapacitySchedulerConfiguration initialSchedulerConfiguration() {
+    Configuration initialSchedConf = getInitSchedulerConfig();
+    return new CapacitySchedulerConfiguration(initialSchedConf, false);
   }
 
   @Override
   public void reloadConfigurationFromStore() throws Exception {
-    formatLock.readLock().lock();
+    mutationPipelineLock.lock();
     try {
-      schedConf = confStore.retrieve();
+      current = new ConfigSnapshot(new CapacitySchedulerConfiguration(
+          confStore.retrieve(), false), confStore.getConfigVersion());
     } finally {
-      formatLock.readLock().unlock();
+      mutationPipelineLock.unlock();
+    }
+  }
+
+  /** Immutable pairing of the provider cache and its durable version. */
+  private static final class ConfigSnapshot {
+    private final CapacitySchedulerConfiguration configuration;
+    private final long storeVersion;
+
+    private ConfigSnapshot(CapacitySchedulerConfiguration configuration,
+        long storeVersion) {
+      this.configuration = configuration;
+      this.storeVersion = storeVersion;
+    }
+
+    private CapacitySchedulerConfiguration getConfiguration() {
+      return configuration;
+    }
+
+    private long getStoreVersion() {
+      return storeVersion;
+    }
+  }
+
+  private static final class PreparedMutation {
+    private final CapacitySchedulerConfiguration configuration;
+    private final Map<String, String> changes;
+    private final ClusterFacts clusterFacts;
+    private final ValidationResult validationResult;
+
+    private PreparedMutation(CapacitySchedulerConfiguration configuration,
+        Map<String, String> changes, ClusterFacts clusterFacts,
+        ValidationResult validationResult) {
+      this.configuration = configuration;
+      this.changes = changes;
+      this.clusterFacts = clusterFacts;
+      this.validationResult = validationResult;
     }
   }
 }

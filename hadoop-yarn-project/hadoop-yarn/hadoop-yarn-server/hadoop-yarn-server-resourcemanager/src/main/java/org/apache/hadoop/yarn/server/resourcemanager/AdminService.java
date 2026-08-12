@@ -448,9 +448,33 @@ public class AdminService extends CompositeService implements
 
   @Private
   public void refreshQueues() throws IOException, YarnException {
+    ResourceScheduler scheduler = rm.getRMContext().getScheduler();
+    if (scheduler instanceof MutableConfScheduler
+        && ((MutableConfScheduler) scheduler).isConfigurationMutable()) {
+      try {
+        Configuration conf = loadNewConfiguration();
+        ((MutableConfScheduler) scheduler).getMutableConfProvider()
+            .refreshScheduler(conf);
+        refreshReservationSystem(conf);
+        return;
+      } catch (IOException | YarnException e) {
+        throw e;
+      } catch (Exception e) {
+        throw new IOException("Failed to refresh scheduler queues", e);
+      }
+    }
+    refreshQueuesInternal();
+  }
+
+  private void refreshQueuesInternal() throws IOException, YarnException {
     Configuration conf = loadNewConfiguration();
     rm.getRMContext().getScheduler().reinitialize(conf,
         this.rm.getRMContext());
+    refreshReservationSystem(conf);
+  }
+
+  private void refreshReservationSystem(Configuration conf)
+      throws YarnException {
     // refresh the reservation system
     ReservationSystem rSystem = rm.getRMContext().getReservationSystem();
     if (rSystem != null) {

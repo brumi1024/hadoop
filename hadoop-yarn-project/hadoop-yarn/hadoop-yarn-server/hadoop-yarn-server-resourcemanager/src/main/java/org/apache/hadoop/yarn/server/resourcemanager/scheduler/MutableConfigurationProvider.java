@@ -18,12 +18,12 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler;
 
+import java.io.IOException;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
-
-import java.io.IOException;
 
 /**
  * Interface for allowing changing scheduler configurations.
@@ -44,14 +44,85 @@ public interface MutableConfigurationProvider {
   void reloadConfigurationFromStore() throws Exception;
 
   /**
-   * Log user's requested configuration mutation, and applies it in-memory.
-   * @param user User who requested the change
-   * @param confUpdate User's requested configuration change
-   * @return LogMutation with update info from given SchedConfUpdateInfo
-   * @throws Exception if logging the mutation fails
+   * Validates, stores, and activates one configuration mutation atomically.
+   * @param user user requesting the mutation
+   * @param confUpdate requested changes
+   * @return validation result and resulting configuration version
+   * @throws Exception when storing or activating a valid mutation fails
    */
-  LogMutation logAndApplyMutation(UserGroupInformation user,
+  MutationResult applyMutation(UserGroupInformation user,
       SchedConfUpdateInfo confUpdate) throws Exception;
+
+  /**
+   * Applies a mutation only when the supplied version is still current.
+   * @param user user requesting the mutation
+   * @param confUpdate requested changes
+   * @param expectedConfigVersion version observed by the caller
+   * @return validation result and resulting configuration version
+   * @throws Exception when the version is stale or the mutation fails
+   */
+  MutationResult applyMutation(UserGroupInformation user,
+      SchedConfUpdateInfo confUpdate, long expectedConfigVersion)
+      throws Exception;
+
+  /**
+   * Builds and validates a proposed mutation under provider serialization.
+   * @param confUpdate requested changes
+   * @return findings and the source version
+   * @throws Exception when the proposed configuration cannot be built
+   */
+  MutationResult validateMutation(SchedConfUpdateInfo confUpdate)
+      throws Exception;
+
+  /**
+   * Refreshes the scheduler while serializing against mutable changes.
+   * @param configuration refreshed ResourceManager configuration
+   * @throws Exception when scheduler refresh fails
+   */
+  void refreshScheduler(Configuration configuration) throws Exception;
+
+  /** Raised before a mutation when its expected version is stale. */
+  final class VersionMismatchException extends IOException {
+    private static final long serialVersionUID = 1L;
+
+    private final long expectedVersion;
+    private final long actualVersion;
+
+    public VersionMismatchException(long expectedVersion, long actualVersion) {
+      super("Expected scheduler configuration version " + expectedVersion
+          + " but current version is " + actualVersion);
+      this.expectedVersion = expectedVersion;
+      this.actualVersion = actualVersion;
+    }
+
+    public long getExpectedVersion() {
+      return expectedVersion;
+    }
+
+    public long getActualVersion() {
+      return actualVersion;
+    }
+  }
+
+  /** Atomic validation and version result for one provider operation. */
+  final class MutationResult {
+    private final ValidationResult validationResult;
+    private final long configVersion;
+
+    public MutationResult(ValidationResult validationResult,
+        long configVersion) {
+      this.validationResult = validationResult;
+      this.configVersion = configVersion;
+    }
+
+    public ValidationResult getValidationResult() {
+      return validationResult;
+    }
+
+    public long getConfigVersion() {
+      return configVersion;
+    }
+  }
 
   /**
    * Apply the changes on top of the actual configuration.
@@ -62,16 +133,6 @@ public interface MutableConfigurationProvider {
    */
   Configuration applyChanges(Configuration oldConfiguration,
                              SchedConfUpdateInfo confUpdate) throws IOException;
-
-  /**
-   * Confirm last logged mutation.
-   * @param pendingMutation the log mutation to apply
-   * @param isValid if the last logged mutation is applied to scheduler
-   *                properly.
-   * @throws Exception if confirming mutation fails
-   */
-  void confirmPendingMutation(LogMutation pendingMutation,
-      boolean isValid) throws Exception;
 
   /**
    * Returns scheduler configuration cached in this provider.
@@ -87,8 +148,6 @@ public interface MutableConfigurationProvider {
   long getConfigVersion() throws Exception;
 
   void formatConfigurationInStore(Configuration conf) throws Exception;
-
-  void revertToOldConfig(Configuration config) throws Exception;
 
   /**
    * Closes the configuration provider, releasing any required resources.

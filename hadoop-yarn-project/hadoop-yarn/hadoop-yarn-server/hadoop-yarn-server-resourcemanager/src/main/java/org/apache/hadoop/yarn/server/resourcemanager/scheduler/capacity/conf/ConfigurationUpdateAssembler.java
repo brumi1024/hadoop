@@ -90,11 +90,16 @@ public final class ConfigurationUpdateAssembler {
     } else {
       confUpdate.put(queuesConfig, Joiner.on(',').join(siblingQueues));
     }
-    for (Map.Entry<String, String> confRemove : proposedConf.getValByRegex(
-                    ".*" + queuePath.getFullPath() + "\\..*")
-            .entrySet()) {
-      proposedConf.unset(confRemove.getKey());
-      confUpdate.put(confRemove.getKey(), null);
+    String removedPrefix = QueuePrefixes.getQueuePrefix(queuePath);
+    List<String> removedKeys = new ArrayList<>();
+    proposedConf.forEach(entry -> {
+      if (entry.getKey().startsWith(removedPrefix)) {
+        removedKeys.add(entry.getKey());
+      }
+    });
+    for (String removedKey : removedKeys) {
+      proposedConf.unset(removedKey);
+      confUpdate.put(removedKey, null);
     }
   }
 

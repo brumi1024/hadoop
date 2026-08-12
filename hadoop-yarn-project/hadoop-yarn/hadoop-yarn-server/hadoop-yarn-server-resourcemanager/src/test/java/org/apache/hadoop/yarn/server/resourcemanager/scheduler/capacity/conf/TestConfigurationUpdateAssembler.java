@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -140,6 +141,21 @@ public class TestConfigurationUpdateAssembler {
     assertTrue(configurationUpdate.containsKey(A_CONFIG_PATH));
     assertNull(configurationUpdate.get(A_CONFIG_PATH));
     assertEquals("b", configurationUpdate.get(ROOT_QUEUES_PATH));
+  }
+
+  @Test
+  public void testRemoveQueuePreservesDottedLookalikeKey() throws Exception {
+    String lookalikeKey = CapacitySchedulerConfiguration.PREFIX
+        + "rootXa." + CONFIG_NAME;
+    csConfig.set(lookalikeKey, "lookalikeValue");
+    SchedConfUpdateInfo updateInfo = new SchedConfUpdateInfo();
+    updateInfo.getRemoveQueueInfo().add(A_PATH);
+
+    Map<String, String> configurationUpdate =
+        ConfigurationUpdateAssembler.constructKeyValueConfUpdate(
+            csConfig, updateInfo);
+
+    assertFalse(configurationUpdate.containsKey(lookalikeKey));
   }
 
   @Test

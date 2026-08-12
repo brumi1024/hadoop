@@ -8015,6 +8015,7 @@ Please note that this feature is currently in the alpha stage and is subject to 
 ### URI
 
       * http://rm-http-address:port/ws/v1/cluster/scheduler-conf
+      * http://rm-http-address:port/ws/v1/cluster/scheduler-conf/v2
 
 ### HTTP Operations Supported
 
@@ -8029,6 +8030,7 @@ Please note that this feature is currently in the alpha stage and is subject to 
 | add-queue | object | A queue to add to the scheduler along with this queue's configurations |
 | remove-queue | string | Full path name of a queue to remove |
 | global-updates | map | Map of key value pairs to update scheduler's global configuration |
+| configVersion | long | Required by `PUT /scheduler-conf/v2`; ignored by the legacy endpoint |
 
 ### GET Request Examples
 
@@ -8071,7 +8073,14 @@ Response Body:
 
 ### PUT Request Examples
 
-Put requests are used to modify the scheduler configuration. A successful mutation results in a 200 response. A malformed request or one which resulted in an invalid scheduler configuration results in a 400 response.
+Put requests are used to modify the scheduler configuration.
+A successful mutation results in a 200 response.
+A malformed request or one which resulted in an invalid scheduler configuration results in a 400 response.
+
+The version-checked endpoint accepts the same mutation document at `PUT /scheduler-conf/v2` and requires `configVersion` from the structured validation response.
+It rejects a stale version with status `409` before storing or activating any changes.
+The conflict response is a `configversion` object containing the current `versionID`.
+The legacy `PUT /scheduler-conf` contract remains unchanged and does not require a version.
 
 **Updating queue configuration(s)**
 
@@ -8335,8 +8344,7 @@ The response contains the configuration-store version that was validated, so a c
 Queue path components must be nonempty.
 Portable queue names use only ASCII letters, digits, `_`, and `-`.
 Other Unicode characters are accepted with a warning.
-An embedded dot in a queue-list component is rejected with an error because it
-would silently change the queue hierarchy.
+An embedded dot in a queue-list component is rejected with an error because it would silently change the queue hierarchy.
 
 Example valid response with a warning:
 
@@ -8380,8 +8388,8 @@ Example error issue:
 }
 ```
 
-An embedded-dot queue-list component is an error.  For example, a proposal
-containing `root.queues=a,b.c` returns status `400` with an issue like this:
+An embedded-dot queue-list component is an error.
+For example, a proposal containing `root.queues=a,b.c` returns status `400` with an issue like this:
 
 ```json
 {

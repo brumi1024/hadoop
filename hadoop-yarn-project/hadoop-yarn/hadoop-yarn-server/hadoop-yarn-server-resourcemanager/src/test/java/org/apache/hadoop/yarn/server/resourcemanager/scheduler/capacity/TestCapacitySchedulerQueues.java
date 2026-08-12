@@ -18,18 +18,25 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Map;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.conf.ConfigurationProvider;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContextImpl;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.NullRMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceLimits;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.security.ClientToAMTokenSecretManagerInRM;
 import org.apache.hadoop.yarn.server.resourcemanager.security.NMTokenSecretManagerInRM;
 import org.apache.hadoop.yarn.server.resourcemanager.security.RMContainerTokenSecretManager;
@@ -85,6 +92,35 @@ public class TestCapacitySchedulerQueues {
   private MockRM rm;
   private NullRMNodeLabelsManager mgr;
   private CapacitySchedulerConfiguration conf;
+
+  public static final class ReloadableConfigurationProvider
+      extends ConfigurationProvider {
+    private static volatile byte[] capacitySchedulerXml;
+
+    static void setCapacitySchedulerConfiguration(Configuration configuration)
+        throws IOException {
+      ByteArrayOutputStream output = new ByteArrayOutputStream();
+      configuration.writeXml(output);
+      capacitySchedulerXml = output.toByteArray();
+    }
+
+    @Override
+    public InputStream getConfigurationInputStream(Configuration bootstrapConf,
+        String name) throws YarnException, IOException {
+      if (YarnConfiguration.CS_CONFIGURATION_FILE.equals(name)) {
+        return new ByteArrayInputStream(capacitySchedulerXml);
+      }
+      return null;
+    }
+
+    @Override
+    public void initInternal(Configuration bootstrapConf) {
+    }
+
+    @Override
+    public void closeInternal() {
+    }
+  }
 
   @BeforeEach
   public void setUp() throws Exception {
@@ -162,6 +198,46 @@ public class TestCapacitySchedulerQueues {
     cs.reinitialize(conf, rm.getRMContext());
     checkQueueStructureCapacities(cs, getDefaultCapacities(80f / 100.0f, 20f / 100.0f));
     cs.stop();
+  }
+
+  @Test
+  public void testFailedAdminRefreshRevertsConfigValues() throws Exception {
+    rm.stop();
+    rm = null;
+    mgr.close();
+    mgr = null;
+
+    CapacitySchedulerConfiguration initial =
+        new CapacitySchedulerConfiguration(new Configuration(false), false);
+    initial.setQueues(ROOT, new String[]{"a", "b"});
+    initial.setCapacity(A, 50f);
+    initial.setCapacity(B, 50f);
+    initial.setMaximumSystemApplications(1111);
+    ReloadableConfigurationProvider.setCapacitySchedulerConfiguration(initial);
+
+    YarnConfiguration bootstrap = new YarnConfiguration();
+    bootstrap.setClass(YarnConfiguration.RM_SCHEDULER,
+        CapacityScheduler.class, ResourceScheduler.class);
+    bootstrap.setClass(YarnConfiguration.RM_CONFIGURATION_PROVIDER_CLASS,
+        ReloadableConfigurationProvider.class, ConfigurationProvider.class);
+    rm = new MockRM(bootstrap);
+    rm.start();
+    CapacityScheduler scheduler =
+        (CapacityScheduler) rm.getResourceScheduler();
+    assertEquals(1111, scheduler.getConfiguration()
+        .getMaximumSystemApplications());
+
+    CapacitySchedulerConfiguration invalid =
+        new CapacitySchedulerConfiguration(initial, false);
+    invalid.setCapacity(A, 80f);
+    invalid.setCapacity(B, 30f);
+    invalid.setMaximumSystemApplications(2222);
+    ReloadableConfigurationProvider.setCapacitySchedulerConfiguration(invalid);
+
+    assertThrows(IOException.class,
+        () -> rm.getAdminService().refreshQueues());
+    assertEquals(1111, scheduler.getConfiguration()
+        .getMaximumSystemApplications());
   }
 
   @Test

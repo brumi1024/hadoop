@@ -71,11 +71,13 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
@@ -97,6 +99,7 @@ import org.apache.hadoop.service.ServiceStateException;
 import org.apache.hadoop.yarn.server.api.records.NodeStatus;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.PreemptionManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -135,6 +138,7 @@ import org.apache.hadoop.yarn.api.records.QueueUserACLInfo;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.api.records.ResourceRequest;
+import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.api.records.UpdateContainerRequest;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.event.AsyncDispatcher;
@@ -265,6 +269,70 @@ public class TestCapacityScheduler {
       // Exception is expected.
       assertTrue(e.getMessage().startsWith("Invalid resource scheduler vcores"),
           "The thrown exception is not the expected one.");
+    }
+  }
+
+  @Test
+  public void testPrevalidatedActivationRollsBackPostQueueFailure()
+      throws Exception {
+    YarnConfiguration conf = new YarnConfiguration();
+    conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
+        ResourceScheduler.class);
+    conf.set(YarnConfiguration.SCHEDULER_CONFIGURATION_STORE_CLASS,
+        YarnConfiguration.MEMORY_CONFIGURATION_STORE);
+
+    try (MockRM rm = new MockRM(conf)) {
+      rm.start();
+      CapacityScheduler scheduler =
+          (CapacityScheduler) rm.getResourceScheduler();
+      CapacitySchedulerConfiguration before = scheduler.getConfiguration();
+      CapacitySchedulerConfiguration proposed =
+          new CapacitySchedulerConfiguration(before, false);
+      proposed.setBoolean(
+          CapacitySchedulerConfiguration.ASSIGN_MULTIPLE_ENABLED,
+          !before.getAssignMultipleEnabled());
+      CSMaxRunningAppsEnforcer enforcer =
+          mock(CSMaxRunningAppsEnforcer.class);
+      doThrow(new RuntimeException("injected post-queue failure"))
+          .when(enforcer).updateRunnabilityOnReload();
+      scheduler.setMaxRunningAppsEnforcer(enforcer);
+
+      assertThrows(Exception.class, () ->
+          scheduler.reinitializePreValidated(proposed, rm.getRMContext(),
+              scheduler.captureClusterFacts()));
+
+      assertSame(before, scheduler.getConfiguration());
+      assertEquals(before.getAssignMultipleEnabled(),
+          scheduler.getConfiguration().getAssignMultipleEnabled());
+    }
+  }
+
+  @Test
+  public void testPrevalidatedActivationRejectsStaleQueueTopology()
+      throws Exception {
+    YarnConfiguration conf = new YarnConfiguration();
+    conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
+        ResourceScheduler.class);
+    conf.set(YarnConfiguration.SCHEDULER_CONFIGURATION_STORE_CLASS,
+        YarnConfiguration.MEMORY_CONFIGURATION_STORE);
+
+    try (MockRM rm = new MockRM(conf)) {
+      rm.start();
+      CapacityScheduler scheduler =
+          (CapacityScheduler) rm.getResourceScheduler();
+      CapacitySchedulerConfiguration before = scheduler.getConfiguration();
+      CapacitySchedulerConfiguration proposed =
+          new CapacitySchedulerConfiguration(before, false);
+      ClusterFacts staleFacts = ClusterFacts.builder()
+          .withOldQueue(new QueuePath("root.stale"),
+              ClusterFacts.QueueKind.LEAF, QueueState.RUNNING, false)
+          .build();
+
+      assertThrows(Exception.class, () ->
+          scheduler.reinitializePreValidated(proposed, rm.getRMContext(),
+              staleFacts));
+
+      assertSame(before, scheduler.getConfiguration());
     }
   }
 

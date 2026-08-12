@@ -18,13 +18,18 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager.webapp;
 
+import org.glassfish.jersey.internal.inject.AbstractBinder;
+import org.glassfish.jersey.server.ResourceConfig;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.http.JettyUtils;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.Sets;
 import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.ResourceManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
@@ -34,13 +39,20 @@ import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.NodeLabelInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.NodeLabelsInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.jsonprovider.ExcludeRootJSONProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.jsonprovider.IncludeRootJSONProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.webapp.jsonprovider.JsonProviderFeature;
 import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
+import org.apache.hadoop.yarn.webapp.GenericExceptionHandler;
+import org.apache.hadoop.yarn.webapp.JerseyTestBase;
 import org.apache.hadoop.yarn.webapp.dao.QueueConfigInfo;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
 
 import org.codehaus.jettison.json.JSONArray;
 import org.codehaus.jettison.json.JSONException;
 import org.codehaus.jettison.json.JSONObject;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,16 +61,23 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.ws.rs.client.Entity;
 import javax.ws.rs.client.WebTarget;
+import javax.ws.rs.core.Application;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
 
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.security.Principal;
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.ACCESSIBLE_NODE_LABELS;
 import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.CAPACITY;
 import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration.MAXIMUM_CAPACITY;
+import static org.apache.hadoop.yarn.server.resourcemanager.webapp.TestWebServiceUtil.backupSchedulerConfigFileInTarget;
+import static org.apache.hadoop.yarn.server.resourcemanager.webapp.TestWebServiceUtil.getCapacitySchedulerConfigFileInTarget;
+import static org.apache.hadoop.yarn.server.resourcemanager.webapp.TestWebServiceUtil.restoreSchedulerConfigFileInTarget;
 import static org.apache.hadoop.yarn.server.resourcemanager.webapp.TestWebServiceUtil.toJson;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -72,11 +91,118 @@ import static org.mockito.Mockito.when;
 /**
  * Test scheduler configuration mutation via REST API.
  */
-public class TestRMWebServicesConfigurationMutation
-    extends AbstractRMWebServicesConfigurationTest {
+public class TestRMWebServicesConfigurationMutation extends JerseyTestBase {
   private static final Logger LOG = LoggerFactory
       .getLogger(TestRMWebServicesConfigurationMutation.class);
   private static final String LABEL_1 = "label1";
+  public static final QueuePath ROOT = new QueuePath("root");
+  public static final QueuePath ROOT_A = new QueuePath("root", "a");
+  public static final QueuePath ROOT_A_A1 = QueuePath.createFromQueues(
+      "root", "a", "a1");
+  public static final QueuePath ROOT_A_A2 = QueuePath.createFromQueues(
+      "root", "a", "a2");
+  public static final QueuePath ROOT_B = new QueuePath("root", "b");
+  public static final QueuePath ROOT_C = new QueuePath("root", "c");
+  public static final QueuePath ROOT_C_C1 = QueuePath.createFromQueues(
+      "root", "c", "c1");
+  public static final QueuePath ROOT_D = new QueuePath("root", "d");
+  private static MockRM rm;
+  private static String userName;
+  private static CapacitySchedulerConfiguration csConf;
+  private static YarnConfiguration conf;
+  private HttpServletRequest request;
+
+  @Override
+  protected Application configure() {
+    ResourceConfig config = new ResourceConfig();
+    config.register(RMWebServices.class);
+    config.register(new JerseyBinder());
+    config.register(GenericExceptionHandler.class);
+    config.register(
+        TestRMWebServicesAppsModification.TestRMCustomAuthFilter.class);
+    config.register(JsonProviderFeature.class);
+    config.register(JAXBContextResolver.class);
+    return config;
+  }
+
+  private class JerseyBinder extends AbstractBinder {
+    @Override
+    protected void configure() {
+      try {
+        userName = UserGroupInformation.getCurrentUser().getShortUserName();
+      } catch (IOException ioe) {
+        throw new RuntimeException("Unable to get current user name "
+            + ioe.getMessage(), ioe);
+      }
+      csConf = new CapacitySchedulerConfiguration(new Configuration(false),
+          false);
+      setupQueueConfiguration(csConf);
+      conf = new YarnConfiguration();
+      conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
+          ResourceScheduler.class);
+      conf.set(YarnConfiguration.SCHEDULER_CONFIGURATION_STORE_CLASS,
+          YarnConfiguration.MEMORY_CONFIGURATION_STORE);
+      conf.set(YarnConfiguration.YARN_ADMIN_ACL, userName);
+      try {
+        FileOutputStream out = new FileOutputStream(
+            getCapacitySchedulerConfigFileInTarget());
+        csConf.writeXml(out);
+        out.close();
+      } catch (IOException e) {
+        throw new RuntimeException("Failed to write XML file", e);
+      }
+      rm = new MockRM(conf);
+
+      request = mock(HttpServletRequest.class);
+      when(request.getScheme()).thenReturn("http");
+      final HttpServletResponse response = mock(HttpServletResponse.class);
+      bind(rm).to(ResourceManager.class).named("rm");
+      bind(csConf).to(Configuration.class).named("conf");
+      Principal principal = () -> userName;
+      bind(request).to(HttpServletRequest.class);
+      when(request.getUserPrincipal()).thenReturn(principal);
+      bind(response).to(HttpServletResponse.class);
+    }
+  }
+
+  @BeforeAll
+  public static void beforeClass() {
+    backupSchedulerConfigFileInTarget();
+  }
+
+  @AfterAll
+  public static void afterClass() {
+    restoreSchedulerConfigFileInTarget();
+  }
+
+  @Override
+  @BeforeEach
+  public void setUp() throws Exception {
+    super.setUp();
+  }
+
+  private static void setupQueueConfiguration(
+      CapacitySchedulerConfiguration config) {
+    config.setQueues(ROOT, new String[]{"a", "b", "c", "mappedqueue"});
+
+    config.setCapacity(ROOT_A, 25f);
+    config.setMaximumCapacity(ROOT_A, 50f);
+
+    config.setQueues(ROOT_A, new String[]{"a1", "a2"});
+    config.setCapacity(ROOT_A_A1, 100f);
+    config.setCapacity(ROOT_A_A2, 0f);
+
+    config.setCapacity(ROOT_B, 75f);
+
+    config.setCapacity(ROOT_C, 0f);
+
+    config.setQueues(ROOT_C, new String[] {"c1"});
+    config.setCapacity(ROOT_C_C1, 0f);
+
+    config.setCapacity(ROOT_D, 0f);
+    config.set(CapacitySchedulerConfiguration.QUEUE_MAPPING,
+        "g:hadoop:mappedqueue");
+  }
 
   public TestRMWebServicesConfigurationMutation() {
   }
@@ -1032,6 +1158,76 @@ public class TestRMWebServicesConfigurationMutation
   }
 
   @Test
+  public void testVersionedPutRejectsAStaleValidatedVersion() throws Exception {
+    long originalVersion = getConfigVersion();
+    SchedConfUpdateInfo updateInfo = new SchedConfUpdateInfo();
+    updateInfo.setConfigVersion(originalVersion);
+    Map<String, String> properties = new HashMap<>();
+    properties.put(CAPACITY, "25");
+    updateInfo.getAddQueueInfo().add(
+        new QueueConfigInfo("root.d", properties));
+    Map<String, String> updateProperties = new HashMap<>();
+    updateProperties.put(CAPACITY, "50");
+    updateInfo.getUpdateQueueInfo().add(
+        new QueueConfigInfo("root.b", updateProperties));
+    WebTarget endpoint = target()
+        .register(new IncludeRootJSONProvider())
+        .register(new ExcludeRootJSONProvider())
+        .path("ws").path("v1").path("cluster")
+        .path(RMWSConsts.SCHEDULER_CONF_V2)
+        .queryParam("user.name", userName);
+
+    Response accepted = endpoint.request(MediaType.APPLICATION_JSON)
+        .put(Entity.entity(updateInfo, MediaType.APPLICATION_JSON),
+            Response.class);
+    assertEquals(Status.OK.getStatusCode(), accepted.getStatus());
+    assertEquals(originalVersion + 1, getConfigVersion());
+
+    Response stale = endpoint.request(MediaType.APPLICATION_JSON)
+        .put(Entity.entity(updateInfo, MediaType.APPLICATION_JSON),
+            Response.class);
+    assertEquals(Status.CONFLICT.getStatusCode(), stale.getStatus());
+    JSONObject conflict = new JSONObject(stale.readEntity(String.class))
+        .getJSONObject("configversion");
+    assertEquals(originalVersion + 1, conflict.getLong("versionID"));
+    assertEquals(originalVersion + 1, getConfigVersion());
+  }
+
+  @Test
+  public void testVersionedPutRequiresConfigVersion() throws Exception {
+    Response response = target()
+        .register(new IncludeRootJSONProvider())
+        .register(new ExcludeRootJSONProvider())
+        .path("ws").path("v1").path("cluster")
+        .path(RMWSConsts.SCHEDULER_CONF_V2)
+        .queryParam("user.name", userName)
+        .request(MediaType.APPLICATION_JSON)
+        .put(Entity.entity(new SchedConfUpdateInfo(),
+            MediaType.APPLICATION_JSON), Response.class);
+
+    assertEquals(Status.BAD_REQUEST.getStatusCode(), response.getStatus());
+    assertEquals("configVersion is required.",
+        response.readEntity(String.class));
+  }
+
+  @Test
+  public void testLegacyPutKeepsPlainTextSuccessResponse() throws Exception {
+    Response response = target()
+        .register(new IncludeRootJSONProvider())
+        .register(new ExcludeRootJSONProvider())
+        .path("ws").path("v1").path("cluster")
+        .path(RMWSConsts.SCHEDULER_CONF)
+        .queryParam("user.name", userName)
+        .request(MediaType.APPLICATION_JSON)
+        .put(Entity.entity(new SchedConfUpdateInfo(),
+            MediaType.APPLICATION_JSON), Response.class);
+
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+    assertEquals("Configuration change successfully applied.",
+        response.readEntity(String.class));
+  }
+
+  @Test
   public void testStructuredValidationXmlOmitsNullableIssueFields()
       throws Exception {
     WebTarget endpoint = validationV2Endpoint();
@@ -1120,6 +1316,15 @@ public class TestRMWebServicesConfigurationMutation
         .path("ws").path("v1").path("cluster")
         .path(RMWSConsts.SCHEDULER_CONF_VALIDATE_V2)
         .queryParam("user.name", userName);
+  }
+
+  @Override
+  @AfterEach
+  public void tearDown() throws Exception {
+    if (rm != null) {
+      rm.stop();
+    }
+    super.tearDown();
   }
 
 }
