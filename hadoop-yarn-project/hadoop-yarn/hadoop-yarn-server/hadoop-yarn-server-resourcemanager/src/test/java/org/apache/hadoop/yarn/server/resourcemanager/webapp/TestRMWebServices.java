@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashMap;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeoutException;
@@ -1104,6 +1105,13 @@ public class TestRMWebServices extends JerseyTestBase {
     when(scheduler.getConf()).thenReturn(config);
     when(configurationProvider
             .applyChanges(any(), any())).thenCallRealMethod();
+    try {
+      when(configurationProvider.runUnderMutationLock(any()))
+          .thenAnswer(invocation -> ((Callable<?>) invocation.getArgument(0))
+              .call());
+    } catch (Exception e) {
+      throw new IOException(e);
+    }
     return scheduler;
   }
 

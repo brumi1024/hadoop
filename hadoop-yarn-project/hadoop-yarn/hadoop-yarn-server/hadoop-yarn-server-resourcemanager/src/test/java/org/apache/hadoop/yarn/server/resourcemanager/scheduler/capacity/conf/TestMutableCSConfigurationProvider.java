@@ -30,7 +30,10 @@ import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfigurationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.webapp.dao.QueueConfigInfo;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,8 +45,16 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -79,11 +90,8 @@ public class TestMutableCSConfigurationProvider {
     goodUpdate.getUpdateQueueInfo().add(goodUpdateInfo);
 
     badUpdate = new SchedConfUpdateInfo();
-    Map<String, String> badUpdateMap = new HashMap<>();
-    badUpdateMap.put("badKey", "badVal");
-    QueueConfigInfo badUpdateInfo = new
-        QueueConfigInfo("root.a", badUpdateMap);
-    badUpdate.getUpdateQueueInfo().add(badUpdateInfo);
+    badUpdate.getGlobalParams().put(
+        YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_MB, "0");
   }
 
   @Test
@@ -95,21 +103,52 @@ public class TestMutableCSConfigurationProvider {
     assertNull(confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.goodKey"));
 
-    LogMutation log = confProvider.logAndApplyMutation(TEST_USER, goodUpdate);
-    confProvider.confirmPendingMutation(log, true);
+    ValidationResult result = confProvider.applyMutation(TEST_USER,
+        goodUpdate);
+    assertTrue(result.isValid(), result.getIssues().toString());
     assertEquals("goodVal", confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.goodKey"));
 
     assertNull(confProvider.loadConfiguration(conf).get(
         "yarn.scheduler.capacity.root.a.badKey"));
-    log = confProvider.logAndApplyMutation(TEST_USER, badUpdate);
-    confProvider.confirmPendingMutation(log, false);
+    assertFalse(confProvider.applyMutation(TEST_USER, badUpdate).isValid());
     assertNull(confProvider.loadConfiguration(conf).get(
         "yarn.scheduler.capacity.root.a.badKey"));
 
     confProvider.formatConfigurationInStore(conf);
     assertNull(confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.goodKey"));
+  }
+
+  @Test
+  public void testMutationUsesPreValidatedActivationOnce() throws Exception {
+    Configuration conf = new Configuration();
+    conf.set(YarnConfiguration.SCHEDULER_CONFIGURATION_STORE_CLASS,
+        YarnConfiguration.MEMORY_CONFIGURATION_STORE);
+    confProvider.init(conf);
+
+    ValidationResult result = confProvider.applyMutation(TEST_USER,
+        goodUpdate);
+
+    assertTrue(result.isValid(), result.getIssues().toString());
+    verify(cs).reinitializePreValidated(any(CapacitySchedulerConfiguration.class),
+        eq(rmContext), any(CSConfigModel.class), any(ClusterFacts.class));
+    verify(cs, never()).reinitializeValidatedConfiguration(
+        any(CapacitySchedulerConfiguration.class), eq(rmContext));
+  }
+
+  @Test
+  public void testPreValidatedActivationRequiresMutationLock() {
+    CapacityScheduler scheduler = spy(new CapacityScheduler());
+    MutableConfigurationProvider provider = mock(MutableConfigurationProvider.class);
+    when(scheduler.getMutableConfProvider()).thenReturn(provider);
+    when(provider.isMutationLockHeld()).thenReturn(false);
+    CapacitySchedulerConfiguration proposed =
+        new CapacitySchedulerConfiguration(new Configuration(false), false);
+
+    assertThrows(IllegalStateException.class, () ->
+        scheduler.reinitializePreValidated(proposed, rmContext,
+            proposed.getModel(), ClusterFacts.empty()));
   }
 
   @Test
@@ -127,8 +166,7 @@ public class TestMutableCSConfigurationProvider {
         QueueConfigInfo("root.a", updateMap);
     updateInfo.getUpdateQueueInfo().add(queueConfigInfo);
 
-    LogMutation log = confProvider.logAndApplyMutation(TEST_USER, updateInfo);
-    confProvider.confirmPendingMutation(log, true);
+    confProvider.applyMutation(TEST_USER, updateInfo);
     assertEquals("testval1", confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.testkey1"));
     assertEquals("testval2", confProvider.loadConfiguration(conf)
@@ -140,8 +178,7 @@ public class TestMutableCSConfigurationProvider {
     queueConfigInfo = new QueueConfigInfo("root.a", updateMap);
     updateInfo.getUpdateQueueInfo().add(queueConfigInfo);
 
-    log = confProvider.logAndApplyMutation(TEST_USER, updateInfo);
-    confProvider.confirmPendingMutation(log, true);
+    confProvider.applyMutation(TEST_USER, updateInfo);
     assertNull(confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.testkey1"),
         "Failed to remove config");
@@ -162,7 +199,7 @@ public class TestMutableCSConfigurationProvider {
     QueueConfigInfo queueConfigInfo1 = new
         QueueConfigInfo("root.a", updateMap1);
     updateInfo1.getUpdateQueueInfo().add(queueConfigInfo1);
-    LogMutation log1 = confProvider.logAndApplyMutation(TEST_USER, updateInfo1);
+    confProvider.applyMutation(TEST_USER, updateInfo1);
 
     SchedConfUpdateInfo updateInfo2 = new SchedConfUpdateInfo();
     Map<String, String> updateMap2 = new HashMap<>();
@@ -170,10 +207,7 @@ public class TestMutableCSConfigurationProvider {
     QueueConfigInfo queueConfigInfo2 = new
         QueueConfigInfo("root.a", updateMap2);
     updateInfo2.getUpdateQueueInfo().add(queueConfigInfo2);
-    LogMutation log2 = confProvider.logAndApplyMutation(TEST_USER, updateInfo2);
-
-    confProvider.confirmPendingMutation(log1, true);
-    confProvider.confirmPendingMutation(log2, true);
+    confProvider.applyMutation(TEST_USER, updateInfo2);
 
     assertEquals("val1", confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.key1"));
@@ -194,21 +228,23 @@ public class TestMutableCSConfigurationProvider {
         YarnConfiguration.FS_CONFIGURATION_STORE);
     conf.set(YarnConfiguration.SCHEDULER_CONFIGURATION_FS_PATH,
         testSchedulerConfigurationDir.getAbsolutePath());
+    conf.set("yarn.scheduler.capacity.root.queues", "a");
+    conf.set("yarn.scheduler.capacity.root.a.capacity", "100");
     writeConf(conf, testSchedulerConfigurationDir.getAbsolutePath());
 
     confProvider.init(conf);
     assertNull(confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.goodKey"));
 
-    LogMutation log = confProvider.logAndApplyMutation(TEST_USER, goodUpdate);
-    confProvider.confirmPendingMutation(log, true);
+    ValidationResult result = confProvider.applyMutation(TEST_USER,
+        goodUpdate);
+    assertTrue(result.isValid(), result.getIssues().toString());
     assertEquals("goodVal", confProvider.loadConfiguration(conf)
         .get("yarn.scheduler.capacity.root.a.goodKey"));
 
     assertNull(confProvider.loadConfiguration(conf).get(
         "yarn.scheduler.capacity.root.a.badKey"));
-    log = confProvider.logAndApplyMutation(TEST_USER, badUpdate);
-    confProvider.confirmPendingMutation(log, false);
+    assertFalse(confProvider.applyMutation(TEST_USER, badUpdate).isValid());
     assertNull(confProvider.loadConfiguration(conf).get(
         "yarn.scheduler.capacity.root.a.badKey"));
 
@@ -248,8 +284,7 @@ public class TestMutableCSConfigurationProvider {
     SchedConfUpdateInfo update = new SchedConfUpdateInfo();
     update.getRemoveQueueInfo().add("root.a");
 
-    confProvider.logAndApplyMutation(UserGroupInformation
-        .getCurrentUser(), update);
+    confProvider.applyMutation(UserGroupInformation.getCurrentUser(), update);
   }
 
   private void writeConf(Configuration conf, String storePath)

@@ -20,10 +20,12 @@ package org.apache.hadoop.yarn.server.resourcemanager.scheduler;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
 
 import java.io.IOException;
+import java.util.concurrent.Callable;
+
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 
 /**
  * Interface for allowing changing scheduler configurations.
@@ -44,14 +46,22 @@ public interface MutableConfigurationProvider {
   void reloadConfigurationFromStore() throws Exception;
 
   /**
-   * Log user's requested configuration mutation, and applies it in-memory.
-   * @param user User who requested the change
-   * @param confUpdate User's requested configuration change
-   * @return LogMutation with update info from given SchedConfUpdateInfo
-   * @throws Exception if logging the mutation fails
+   * Validates, stores, and activates one configuration mutation atomically.
+   * @param user user requesting the mutation
+   * @param confUpdate requested changes
+   * @return structured validation result
+   * @throws Exception when storing or activating a valid mutation fails
    */
-  LogMutation logAndApplyMutation(UserGroupInformation user,
+  ValidationResult applyMutation(UserGroupInformation user,
       SchedConfUpdateInfo confUpdate) throws Exception;
+
+  /** Runs an operation under the provider's mutation serialization lock. */
+  <T> T runUnderMutationLock(Callable<T> operation) throws Exception;
+
+  /** Returns whether the current thread owns the mutation serialization lock. */
+  default boolean isMutationLockHeld() {
+    return false;
+  }
 
   /**
    * Apply the changes on top of the actual configuration.
@@ -62,16 +72,6 @@ public interface MutableConfigurationProvider {
    */
   Configuration applyChanges(Configuration oldConfiguration,
                              SchedConfUpdateInfo confUpdate) throws IOException;
-
-  /**
-   * Confirm last logged mutation.
-   * @param pendingMutation the log mutation to apply
-   * @param isValid if the last logged mutation is applied to scheduler
-   *                properly.
-   * @throws Exception if confirming mutation fails
-   */
-  void confirmPendingMutation(LogMutation pendingMutation,
-      boolean isValid) throws Exception;
 
   /**
    * Returns scheduler configuration cached in this provider.
@@ -87,8 +87,6 @@ public interface MutableConfigurationProvider {
   long getConfigVersion() throws Exception;
 
   void formatConfigurationInStore(Configuration conf) throws Exception;
-
-  void revertToOldConfig(Configuration config) throws Exception;
 
   /**
    * Closes the configuration provider, releasing any required resources.

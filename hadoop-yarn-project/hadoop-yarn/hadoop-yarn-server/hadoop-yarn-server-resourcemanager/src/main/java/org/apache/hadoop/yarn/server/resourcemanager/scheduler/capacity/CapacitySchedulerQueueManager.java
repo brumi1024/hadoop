@@ -193,16 +193,6 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
     CSQueue newRoot = parseQueue(this.csContext.getQueueContext(), newConf, null,
         CapacitySchedulerConfiguration.ROOT, newQueues, queues, NOOP);
 
-    // When failing over, if using configuration store, don't validate queue
-    // hierarchy since queues can be removed without being STOPPED.
-    if (!csContext.isConfigurationMutable() ||
-        csContext.getRMContext().getHAServiceState()
-            != HAServiceProtocol.HAServiceState.STANDBY) {
-      // Ensure queue hierarchy in the new XML file is proper.
-      CapacitySchedulerConfigValidator
-              .validateQueueHierarchy(queues, newQueues, newConf);
-    }
-
     // Add new queues and delete OldQeueus only after validation.
     updateQueues(queues, newQueues);
 

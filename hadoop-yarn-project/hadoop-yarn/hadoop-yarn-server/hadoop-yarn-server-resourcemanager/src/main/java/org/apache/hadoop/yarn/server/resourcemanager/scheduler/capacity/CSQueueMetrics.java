@@ -296,9 +296,7 @@ public class CSQueueMetrics extends QueueMetrics {
 
   public synchronized static CSQueueMetrics forQueue(String queueName,
       Queue parent, boolean enableUserMetrics, Configuration conf) {
-    final boolean isConfigValidation = isConfigurationValidationSet(conf);
-    MetricsSystem ms = isConfigValidation
-        ? new ValidationMetricsSystem() : DefaultMetricsSystem.instance();
+    MetricsSystem ms = DefaultMetricsSystem.instance();
     QueueMetrics metrics = getQueueMetrics().get(queueName);
     if (metrics == null) {
       metrics =
@@ -312,9 +310,7 @@ public class CSQueueMetrics extends QueueMetrics {
                 + queueName, metrics);
       }
 
-      if (!isConfigValidation) {
-        getQueueMetrics().put(queueName, metrics);
-      }
+      getQueueMetrics().put(queueName, metrics);
     }
 
     return (CSQueueMetrics) metrics;

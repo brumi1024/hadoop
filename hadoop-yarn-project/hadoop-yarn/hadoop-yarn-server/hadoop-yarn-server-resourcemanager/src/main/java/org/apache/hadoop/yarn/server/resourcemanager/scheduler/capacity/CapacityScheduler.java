@@ -47,6 +47,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Marker;
 import org.slf4j.MarkerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.LimitedPrivate;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Evolving;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
@@ -120,6 +121,14 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.Activi
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.ActivityState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.AllocationState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.CSConfigurationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.MemoryAllocationRule;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.PlacementRuleDuplicatesRule;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.VcoresAllocationRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.FileBasedCSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.MutableCSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.KillableContainer;
@@ -214,9 +223,9 @@ public class CapacityScheduler extends
 
   private void validateConf(Configuration conf) {
     // validate scheduler memory allocation setting
-    CapacitySchedulerConfigValidator.validateMemoryAllocation(conf);
+    MemoryAllocationRule.validate(conf);
     // validate scheduler vcores allocation setting
-    CapacitySchedulerConfigValidator.validateVCores(conf);
+    VcoresAllocationRule.validate(conf);
   }
 
   @Override
@@ -438,17 +447,64 @@ public class CapacityScheduler extends
     super.serviceStop();
   }
 
-  public void reinitialize(Configuration newConf, RMContext rmContext,
-         boolean validation) throws IOException {
+  @Override
+  public void reinitialize(Configuration newConf, RMContext rmContext)
+      throws IOException {
+    Configuration configuration = new Configuration(newConf);
+    CapacitySchedulerConfiguration proposed =
+        csConfProvider.loadConfiguration(configuration);
+    reinitializeValidatedConfiguration(proposed, rmContext);
+  }
+
+  /**
+   * Reinitializes from a scheduler configuration after validating its model.
+   * @param proposed proposed scheduler configuration
+   * @param rmContext ResourceManager context
+   * @throws IOException when validation or queue replacement fails
+   */
+  public void reinitializeValidatedConfiguration(
+      CapacitySchedulerConfiguration proposed, RMContext rmContext)
+      throws IOException {
+    CSConfigModel model = proposed.getModel();
+    ClusterFacts facts = ClusterFacts.capture(this);
+    ValidationResult validation = new CSConfigValidationEngine()
+        .validate(model, facts);
+    if (!validation.isValid()) {
+      throw validationFailure(validation);
+    }
+    activateConfiguration(proposed, rmContext);
+  }
+
+  /**
+   * Activates a configuration that was validated by the mutation provider
+   * while holding its serialization lock.
+   * @param proposed proposed scheduler configuration
+   * @param rmContext ResourceManager context
+   * @param validatedModel model already validated by the caller
+   * @param validatedFacts facts used for caller validation
+   * @throws IOException when queue replacement fails
+   */
+  @Private
+  public void reinitializePreValidated(
+      CapacitySchedulerConfiguration proposed, RMContext rmContext,
+      CSConfigModel validatedModel, ClusterFacts validatedFacts)
+      throws IOException {
+    Preconditions.checkNotNull(proposed);
+    Preconditions.checkNotNull(rmContext);
+    Preconditions.checkNotNull(validatedModel);
+    Preconditions.checkNotNull(validatedFacts);
+    Preconditions.checkState(getMutableConfProvider() != null
+        && getMutableConfProvider().isMutationLockHeld(),
+        "Mutation lock must be held for pre-validated reinitialization");
+    activateConfiguration(proposed, rmContext);
+  }
+
+  private void activateConfiguration(CapacitySchedulerConfiguration proposed,
+      RMContext rmContext) throws IOException {
     writeLock.lock();
     try {
-      Configuration configuration = new Configuration(newConf);
       CapacitySchedulerConfiguration oldConf = this.conf;
-      if (validation) {
-        this.conf = new CapacitySchedulerConfiguration(newConf, false);
-      } else {
-        this.conf = csConfProvider.loadConfiguration(configuration);
-      }
+      this.conf = proposed;
       validateConf(this.conf);
       try {
         LOG.info("Re-initializing queues...");
@@ -463,37 +519,38 @@ public class CapacityScheduler extends
         throw new IOException("Failed to re-init queues : " + t.getMessage(),
             t);
       }
-      if (!validation) {
 
-        // update lazy preemption
-        this.isLazyPreemptionEnabled = this.conf.getLazyPreemptionEnabled();
+      // update lazy preemption
+      this.isLazyPreemptionEnabled = this.conf.getLazyPreemptionEnabled();
 
-        // Setup how many containers we can allocate for each round
-        assignMultipleEnabled = this.conf.getAssignMultipleEnabled();
-        maxAssignPerHeartbeat = this.conf.getMaxAssignPerHeartbeat();
-        offswitchPerHeartbeatLimit = this.conf.getOffSwitchPerHeartbeatLimit();
-        appShouldFailFast = CapacitySchedulerConfiguration.shouldAppFailFast(
-            getConfig());
+      // Setup how many containers we can allocate for each round
+      assignMultipleEnabled = this.conf.getAssignMultipleEnabled();
+      maxAssignPerHeartbeat = this.conf.getMaxAssignPerHeartbeat();
+      offswitchPerHeartbeatLimit = this.conf.getOffSwitchPerHeartbeatLimit();
+      appShouldFailFast = CapacitySchedulerConfiguration.shouldAppFailFast(
+          getConfig());
 
-        LOG.info("assignMultipleEnabled = " + assignMultipleEnabled + "\n" +
-            "maxAssignPerHeartbeat = " + maxAssignPerHeartbeat + "\n" +
-            "offswitchPerHeartbeatLimit = " + offswitchPerHeartbeatLimit);
+      LOG.info("assignMultipleEnabled = " + assignMultipleEnabled + "\n" +
+          "maxAssignPerHeartbeat = " + maxAssignPerHeartbeat + "\n" +
+          "offswitchPerHeartbeatLimit = " + offswitchPerHeartbeatLimit);
 
-        super.reinitialize(newConf, rmContext);
-      }
+      super.reinitialize(proposed, rmContext);
       maxRunningEnforcer.updateRunnabilityOnReload();
     } finally {
       writeLock.unlock();
     }
-
   }
 
-  @Override
-  public void reinitialize(Configuration newConf, RMContext rmContext)
-      throws IOException {
-    reinitialize(newConf, rmContext, false);
+  private IOException validationFailure(ValidationResult validation) {
+    String message = validation.getIssues().stream()
+        .filter(issue -> issue.getSeverity()
+            == ValidationIssue.Severity.ERROR)
+        .map(ValidationIssue::getMessage)
+        .collect(java.util.stream.Collectors.joining("\n"));
+    IOException validationFailure = new IOException(message);
+    return new IOException("Failed to re-init queues : " + message,
+        validationFailure);
   }
-
   long getAsyncScheduleInterval() {
     return asyncSchedulingConf.getAsyncScheduleInterval();
   }
@@ -751,8 +808,8 @@ public class CapacityScheduler extends
     Collection<String> placementRuleStrs = conf.getStringCollection(
         YarnConfiguration.QUEUE_PLACEMENT_RULES);
     List<PlacementRule> placementRules = new ArrayList<>();
-    Set<String> distinguishRuleSet = CapacitySchedulerConfigValidator
-            .validatePlacementRules(placementRuleStrs);
+    Set<String> distinguishRuleSet =
+        PlacementRuleDuplicatesRule.validateRuleClassNames(placementRuleStrs);
 
     // add UserGroupMappingPlacementRule if empty,default value of
     // yarn.scheduler.queue-placement-rules is user-group

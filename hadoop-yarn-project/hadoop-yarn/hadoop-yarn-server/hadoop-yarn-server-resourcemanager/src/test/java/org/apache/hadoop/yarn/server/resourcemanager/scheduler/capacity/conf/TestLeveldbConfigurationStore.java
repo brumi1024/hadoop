@@ -38,6 +38,7 @@ import org.iq80.leveldb.DBIterator;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -124,17 +125,17 @@ public class TestLeveldbConfigurationStore extends
         rm1.getResourceScheduler()).getMutableConfProvider();
     UserGroupInformation user = UserGroupInformation
         .createUserForTesting(TEST_USER, new String[0]);
-    LogMutation log = confProvider.logAndApplyMutation(user,
-        schedConfUpdateInfo);
-    rm1.getResourceScheduler().reinitialize(conf, rm1.getRMContext());
+    confProvider.applyMutation(user, schedConfUpdateInfo);
     assertEquals("val", ((MutableConfScheduler) rm1.getResourceScheduler())
         .getConfiguration().get("key"));
-    confProvider.confirmPendingMutation(log, true);
     assertEquals("val", ((MutableCSConfigurationProvider) confProvider)
         .getConfStore().retrieve().get("key"));
     // Next update is not persisted, it should not be recovered
     schedConfUpdateInfo.getGlobalParams().put("key", "badVal");
-    confProvider.logAndApplyMutation(user, schedConfUpdateInfo);
+    Map<String, String> unconfirmed = new HashMap<>();
+    unconfirmed.put("key", "badVal");
+    ((MutableCSConfigurationProvider) confProvider).getConfStore()
+        .logMutation(new LogMutation(unconfirmed, user.getShortUserName()));
     rm1.close();
 
     // Start RM2 and verifies it starts with updated configuration

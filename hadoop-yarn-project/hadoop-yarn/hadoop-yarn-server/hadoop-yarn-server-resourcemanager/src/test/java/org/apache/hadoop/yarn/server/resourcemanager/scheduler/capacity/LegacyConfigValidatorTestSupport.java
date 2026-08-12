@@ -23,7 +23,10 @@ import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,37 +34,38 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.stream.Collectors;
 
-public final class CapacitySchedulerConfigValidator {
+/** Legacy assertions retained only as test support for behavioral parity. */
+final class LegacyConfigValidatorTestSupport {
   private static final Logger LOG = LoggerFactory.getLogger(
-          CapacitySchedulerConfigValidator.class);
+          LegacyConfigValidatorTestSupport.class);
 
-  private CapacitySchedulerConfigValidator() {
+  private LegacyConfigValidatorTestSupport() {
     throw new IllegalStateException("Utility class");
   }
 
   public static boolean validateCSConfiguration(
           final Configuration oldConfParam, final Configuration newConf,
           final RMContext rmContext) throws IOException {
-    // ensure that the oldConf is deep copied
-    Configuration oldConf = new Configuration(oldConfParam);
-    QueueMetrics.setConfigurationValidation(oldConf, true);
-    QueueMetrics.setConfigurationValidation(newConf, true);
-
     CapacityScheduler liveScheduler = (CapacityScheduler) rmContext.getScheduler();
-    CapacityScheduler newCs = new CapacityScheduler();
-    try {
-      //TODO: extract all the validation steps and replace reinitialize with
-      //the specific validation steps
-      newCs.setConf(oldConf);
-      newCs.setRMContext(rmContext);
-      newCs.init(oldConf);
-      newCs.addNodes(liveScheduler.getAllNodes());
-      newCs.reinitialize(newConf, rmContext, true);
-      return true;
-    } finally {
-      newCs.stop();
+    CapacitySchedulerConfiguration proposed =
+        new CapacitySchedulerConfiguration(newConf, false);
+    CapacitySchedulerConfiguration current =
+        new CapacitySchedulerConfiguration(oldConfParam, false);
+    ValidationResult result = new CSConfigValidationEngine().validate(
+        proposed.getModel(), ClusterFacts.capture(liveScheduler,
+            current.getModel()));
+    if (!result.isValid()) {
+      String message = result.getIssues().stream()
+          .filter(issue -> issue.getSeverity()
+              == ValidationIssue.Severity.ERROR)
+          .map(ValidationIssue::getMessage)
+          .collect(Collectors.joining("\n"));
+      throw new IOException("Failed to re-init queues : " + message,
+          new IOException(message));
     }
+    return true;
   }
 
   public static Set<String> validatePlacementRules(

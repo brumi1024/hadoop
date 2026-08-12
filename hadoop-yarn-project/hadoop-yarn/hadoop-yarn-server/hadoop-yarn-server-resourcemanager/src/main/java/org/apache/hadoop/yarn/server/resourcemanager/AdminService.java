@@ -435,19 +435,31 @@ public class AdminService extends CompositeService implements
     Configuration conf = getConfiguration(new Configuration(false),
         YarnConfiguration.YARN_SITE_CONFIGURATION_FILE,
         YarnConfiguration.RESOURCE_TYPES_CONFIGURATION_FILE);
-    // The reason we call Configuration#size() is because when getConfiguration
-    // been called, it invokes Configuration#addResouce, which invokes
-    // Configuration#reloadConfiguration which triggers the reload process in a
-    // lazy way, the properties will only be reload when it's needed rather than
-    // reload it right after getConfiguration been called. So here we call
-    // Configuration#size() to force the Configuration#getProps been called to
-    // reload all the properties.
-    conf.size();
     return conf;
   }
 
   @Private
   public void refreshQueues() throws IOException, YarnException {
+    ResourceScheduler scheduler = rm.getRMContext().getScheduler();
+    if (scheduler instanceof MutableConfScheduler
+        && ((MutableConfScheduler) scheduler).isConfigurationMutable()) {
+      try {
+        ((MutableConfScheduler) scheduler).getMutableConfProvider()
+            .runUnderMutationLock(() -> {
+              refreshQueuesInternal();
+              return null;
+            });
+        return;
+      } catch (IOException | YarnException e) {
+        throw e;
+      } catch (Exception e) {
+        throw new IOException("Failed to refresh scheduler queues", e);
+      }
+    }
+    refreshQueuesInternal();
+  }
+
+  private void refreshQueuesInternal() throws IOException, YarnException {
     Configuration conf = loadNewConfiguration();
     rm.getRMContext().getScheduler().reinitialize(conf,
         this.rm.getRMContext());

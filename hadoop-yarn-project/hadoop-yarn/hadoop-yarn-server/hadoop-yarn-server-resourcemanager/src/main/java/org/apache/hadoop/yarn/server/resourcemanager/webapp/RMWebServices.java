@@ -156,7 +156,6 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.YarnScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
@@ -2765,9 +2764,10 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       try {
         MutableConfigurationProvider mutableConfigurationProvider =
                 ((MutableConfScheduler) scheduler).getMutableConfProvider();
-        ProposedValidation proposed = validateProposedConfiguration(
-            mutableConfigurationProvider, (CapacityScheduler) scheduler,
-            mutationInfo);
+        ProposedValidation proposed = mutableConfigurationProvider
+            .runUnderMutationLock(() -> validateProposedConfiguration(
+                mutableConfigurationProvider, (CapacityScheduler) scheduler,
+                mutationInfo));
         if (!proposed.result.isValid()) {
           throw new IOException(joinErrorIssues(proposed.result));
         }
@@ -2812,8 +2812,9 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
     try {
       MutableConfigurationProvider provider =
           ((MutableConfScheduler) scheduler).getMutableConfProvider();
-      ProposedValidation proposed = validateProposedConfiguration(provider,
-          (CapacityScheduler) scheduler, mutationInfo);
+      ProposedValidation proposed = provider.runUnderMutationLock(
+          () -> validateProposedConfiguration(provider,
+              (CapacityScheduler) scheduler, mutationInfo));
       ValidationResultInfo entity = ValidationResultInfo.from(
           proposed.result, proposed.configVersion);
       return Response.status(proposed.result.isValid()
@@ -2875,7 +2876,7 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
   @Produces({ MediaType.APPLICATION_JSON + "; " + JettyUtils.UTF_8,
       MediaType.APPLICATION_XML + "; " + JettyUtils.UTF_8 })
   @Consumes({ MediaType.APPLICATION_JSON, MediaType.APPLICATION_XML })
-  public synchronized Response updateSchedulerConfiguration(SchedConfUpdateInfo
+  public Response updateSchedulerConfiguration(SchedConfUpdateInfo
       mutationInfo, @Context HttpServletRequest hsr)
       throws AuthorizationException, InterruptedException {
     UserGroupInformation callerUGI = getCallerUserGroupInformation(hsr, true);
@@ -2890,13 +2891,23 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
           .entity("Configuration change only supported by mutable configuration store.").build();
     } else {
       try {
-        callerUGI.doAs((PrivilegedExceptionAction<Void>) () -> {
+        ValidationResult validation = callerUGI.doAs(
+            (PrivilegedExceptionAction<ValidationResult>) () -> {
           MutableConfigurationProvider provider =
               ((MutableConfScheduler) scheduler).getMutableConfProvider();
-          LogMutation logMutation = applyMutation(provider, callerUGI,
-              mutationInfo);
-          return refreshQueues(provider, logMutation);
+          if (!provider.getAclMutationPolicy().isMutationAllowed(callerUGI,
+              mutationInfo)) {
+            throw new org.apache.hadoop.security.AccessControlException(
+                "User is not admin of all modified queues.");
+          }
+          return provider.applyMutation(callerUGI, mutationInfo);
         });
+        if (!validation.isValid()) {
+          String errors = joinErrorIssues(validation);
+          LOG.warn("CapacityScheduler configuration mutation rejected: {}",
+              errors);
+          return Response.status(Status.BAD_REQUEST).entity(errors).build();
+        }
       } catch (IOException e) {
         LOG.error("Exception thrown when modifying configuration.", e);
         return Response.status(Status.BAD_REQUEST).entity(e.getMessage()).build();
@@ -2904,29 +2915,6 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       return Response.status(Status.OK).entity("Configuration change successfully applied.")
           .build();
     }
-  }
-
-  private Void refreshQueues(MutableConfigurationProvider provider,
-      LogMutation logMutation) throws Exception {
-    try {
-      rm.getRMContext().getRMAdminService().refreshQueues();
-    } catch (IOException | YarnException e) {
-      provider.confirmPendingMutation(logMutation, false);
-      throw e;
-    }
-    provider.confirmPendingMutation(logMutation, true);
-    return null;
-  }
-
-  private LogMutation applyMutation(MutableConfigurationProvider provider,
-      UserGroupInformation callerUGI, SchedConfUpdateInfo mutationInfo)
-      throws Exception {
-    if (!provider.getAclMutationPolicy().isMutationAllowed(callerUGI,
-        mutationInfo)) {
-      throw new org.apache.hadoop.security.AccessControlException("User"
-          + " is not admin of all modified queues.");
-    }
-    return provider.logAndApplyMutation(callerUGI, mutationInfo);
   }
 
   private boolean isConfigurationMutable(ResourceScheduler scheduler) {
