@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { createContext, use, useState, type PropsWithChildren } from 'react';
 import type { JSX } from 'react';
 import { SPECIAL_VALUES } from '~/types/constants/special-values';
@@ -165,6 +164,7 @@ export const ValidationProvider = ({ children }: PropsWithChildren): JSX.Element
       fieldName,
       fieldValue,
       config: effectiveConfig,
+      originalConfig: configData,
       schedulerData,
       stagedChanges,
       legacyModeEnabled: legacyValue !== 'false',

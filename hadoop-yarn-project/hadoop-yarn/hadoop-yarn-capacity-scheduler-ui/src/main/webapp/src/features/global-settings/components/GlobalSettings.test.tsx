@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import type { ReactNode } from 'react';
@@ -321,7 +320,7 @@ describe('GlobalSettings', () => {
       fireEvent.change(input, { target: { value: 'new-value' } });
 
       // Verify the function was called with expected value
-      expect(stageGlobalChange).toHaveBeenCalledWith('test-property', 'new-value', []);
+      expect(stageGlobalChange).toHaveBeenCalledWith('test-property', 'new-value');
     });
 
     it('should handle multiple property changes independently', () => {
@@ -344,8 +343,8 @@ describe('GlobalSettings', () => {
       fireEvent.change(input2, { target: { value: 'value2' } });
 
       // Verify both properties were updated
-      expect(stageGlobalChange).toHaveBeenCalledWith('prop1', 'value1', []);
-      expect(stageGlobalChange).toHaveBeenCalledWith('prop2', 'value2', []);
+      expect(stageGlobalChange).toHaveBeenCalledWith('prop1', 'value1');
+      expect(stageGlobalChange).toHaveBeenCalledWith('prop2', 'value2');
     });
   });
 
@@ -522,8 +521,8 @@ describe('GlobalSettings', () => {
       fireEvent.change(input2, { target: { value: 'test2' } });
 
       // Verify the property names were handled correctly
-      expect(stageGlobalChange).toHaveBeenCalledWith('property-with-dashes', 'test1', []);
-      expect(stageGlobalChange).toHaveBeenCalledWith('property.with.dots', 'test2', []);
+      expect(stageGlobalChange).toHaveBeenCalledWith('property-with-dashes', 'test1');
+      expect(stageGlobalChange).toHaveBeenCalledWith('property.with.dots', 'test2');
     });
 
     it('should render correctly when properties have the same category', () => {

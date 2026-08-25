@@ -16,14 +16,13 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi } from 'vitest';
 import { createStagedChangesSlice } from './stagedChangesSlice';
-import type { StagedChange } from '~/types';
-import { validateStagedChanges } from '~/features/validation/crossQueue';
+import { AUTO_CREATION_PROPS, SPECIAL_VALUES, type StagedChange } from '~/types';
+import { validateStagedChanges } from '~/features/validation/service';
 
 // Mock dependencies
-vi.mock('~/features/validation/crossQueue');
+vi.mock('~/features/validation/service');
 vi.mock('~/features/validation/utils/configUtils', () => ({
   getMergedConfigData: vi.fn((configData) => configData),
 }));
@@ -71,11 +70,11 @@ describe('stagedChangesSlice - validation refresh', () => {
           '1',
           [
             {
-              queuePath: 'root.parent',
-              field: 'capacity',
-              message: 'Child queue capacities must sum to 100%',
+              queuePath: 'root.parent.child1',
+              field: 'maximum-capacity',
+              message: 'Maximum capacity must be greater than or equal to capacity',
               severity: 'error',
-              rule: 'child-capacity-sum',
+              rule: 'max-capacity-minimum',
             },
           ],
         ],
@@ -93,9 +92,9 @@ describe('stagedChangesSlice - validation refresh', () => {
     expect(updatedChanges[0].validationErrors).toBeDefined();
     expect(updatedChanges[0].validationErrors).toContainEqual(
       expect.objectContaining({
-        field: 'capacity',
-        message: 'Child queue capacities must sum to 100%',
-        rule: 'child-capacity-sum',
+        field: 'maximum-capacity',
+        message: 'Maximum capacity must be greater than or equal to capacity',
+        rule: 'max-capacity-minimum',
       }),
     );
   });
@@ -114,9 +113,9 @@ describe('stagedChangesSlice - validation refresh', () => {
           validationErrors: [
             {
               field: 'capacity',
-              message: 'Child queue capacities must sum to 100%',
+              message: 'Maximum capacity must be greater than or equal to capacity',
               severity: 'error',
-              rule: 'child-capacity-sum',
+              rule: 'max-capacity-minimum',
             },
           ],
         },
@@ -148,7 +147,13 @@ describe('stagedChangesSlice - validation refresh', () => {
     expect(updatedChanges[0].validationErrors).toBeUndefined();
   });
 
-  it('should handle absolute resource validation', () => {
+  it.each([
+    ['capacity', 'root.parent.child1'],
+    ['maximum-capacity', 'root.parent.child1'],
+    [AUTO_CREATION_PROPS.FLEXIBLE_ENABLED, 'root.parent.child1'],
+    [SPECIAL_VALUES.LEGACY_MODE_PROPERTY, SPECIAL_VALUES.GLOBAL_QUEUE_PATH],
+  ])('should refresh local validation when %s changes', (property, queuePath) => {
+    const refreshValidationErrors = vi.fn();
     const state = {
       stagedChanges: [
         {
@@ -156,60 +161,23 @@ describe('stagedChangesSlice - validation refresh', () => {
           type: 'update' as const,
           queuePath: 'root.parent.child1',
           property: 'capacity',
-          oldValue: '[memory=1024,vcores=4]',
-          newValue: '[memory=3000,vcores=4]',
+          oldValue: '2w',
+          newValue: '50',
           timestamp: Date.now(),
         },
       ] as StagedChange[],
-      configData: new Map([
-        ['yarn.scheduler.capacity.root.parent.capacity', '[memory=2048,vcores=8]'],
-        ['yarn.scheduler.capacity.root.parent.child1.capacity', '[memory=1024,vcores=4]'],
-      ]),
-      schedulerData: {
-        type: 'capacityScheduler',
-        capacity: 100,
-        usedCapacity: 0,
-        maxCapacity: 100,
-        queueName: 'root',
-        queues: { queue: [] },
-      } as any,
+      configData: new Map<string, string>(),
+      schedulerData: null,
+      refreshValidationErrors,
     };
 
     const mockGet = vi.fn(() => state);
-    const mockSet = vi.fn((fn) => fn(state as any));
-
-    vi.mocked(validateStagedChanges).mockReturnValue(
-      new Map([
-        [
-          '1',
-          [
-            {
-              queuePath: 'root.parent.child1',
-              field: 'capacity',
-              message:
-                'Child queue memory allocation (3000) cannot exceed parent queue memory allocation (2048)',
-              severity: 'warning',
-              rule: 'parent-child-capacity-constraint',
-            },
-          ],
-        ],
-      ]),
-    );
-
+    const mockSet = vi.fn();
     const slice = createStagedChangesSlice(mockSet as any, mockGet as any, {} as any);
 
-    // Call refreshValidationErrors
-    slice.refreshValidationErrors();
+    slice.refreshAffectedValidationErrors(queuePath, property);
 
-    // Verify the validation warning was attached
-    const updatedChanges = state.stagedChanges;
-    expect(updatedChanges[0].validationErrors).toContainEqual(
-      expect.objectContaining({
-        message: expect.stringContaining('memory allocation (3000)'),
-        rule: 'parent-child-capacity-constraint',
-        severity: 'warning',
-      }),
-    );
+    expect(refreshValidationErrors).toHaveBeenCalledOnce();
   });
 });
 
@@ -218,10 +186,12 @@ describe('stagedChangesSlice - auto-creation enablement', () => {
     const queuePath = 'root.default';
     const propertyKey = 'yarn.scheduler.capacity.root.default.auto-create-child-queue.enabled';
 
-    const updateSchedulerConf = vi.fn().mockResolvedValue(undefined);
-    const validateSchedulerConf = vi.fn().mockResolvedValue({
-      validation: 'passed',
-      versionId: '2',
+    const updateSchedulerConf = vi.fn().mockResolvedValue({
+      validationResult: {
+        valid: true,
+        configVersion: 2,
+        issues: { issue: [] },
+      },
     });
     const getSchedulerConf = vi.fn().mockResolvedValue({
       property: [{ name: propertyKey, value: 'true' }],
@@ -230,7 +200,6 @@ describe('stagedChangesSlice - auto-creation enablement', () => {
 
     const apiClient = {
       updateSchedulerConf,
-      validateSchedulerConf,
       getSchedulerConf,
       getSchedulerConfVersion,
     } as any;
@@ -279,18 +248,6 @@ describe('stagedChangesSlice - auto-creation enablement', () => {
 
     await state.applyChanges();
 
-    expect(validateSchedulerConf).toHaveBeenCalledTimes(1);
-    expect(validateSchedulerConf).toHaveBeenCalledWith({
-      'update-queue': [
-        {
-          'queue-name': queuePath,
-          params: {
-            entry: [{ key: 'auto-create-child-queue.enabled', value: 'true' }],
-          },
-        },
-      ],
-    });
-
     expect(updateSchedulerConf).toHaveBeenCalledTimes(3);
 
     expect(updateSchedulerConf.mock.calls[0][0]).toEqual({
@@ -304,8 +261,8 @@ describe('stagedChangesSlice - auto-creation enablement', () => {
       ],
     });
 
-    const finalMutation = updateSchedulerConf.mock.calls[1][0];
-    expect(finalMutation['update-queue']).toEqual([
+    const mutation = updateSchedulerConf.mock.calls[1][0];
+    expect(mutation['update-queue']).toEqual([
       {
         'queue-name': queuePath,
         params: {
@@ -315,13 +272,7 @@ describe('stagedChangesSlice - auto-creation enablement', () => {
         },
       },
     ]);
-    expect(finalMutation['global-updates']).toEqual([
-      {
-        entry: expect.arrayContaining([
-          { key: 'yarn.webservice.mutation-api.version', value: '2' },
-        ]),
-      },
-    ]);
+    expect(mutation['global-updates']).toBeUndefined();
 
     expect(updateSchedulerConf.mock.calls[2][0]).toEqual({
       'update-queue': [

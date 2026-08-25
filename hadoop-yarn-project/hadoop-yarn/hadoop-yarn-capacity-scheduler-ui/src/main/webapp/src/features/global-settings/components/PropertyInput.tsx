@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import { Input } from '~/components/ui/input';
 import { FieldSwitch } from '~/components/ui/field-switch';
@@ -28,19 +27,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '~/components/ui/select';
-import {
-  Field,
-  FieldControl,
-  FieldDescription,
-  FieldLabel,
-  FieldMessage,
-} from '~/components/ui/field';
+import { Field, FieldControl, FieldDescription, FieldLabel } from '~/components/ui/field';
 import { cn } from '~/utils/cn';
 import type { PropertyDescriptor } from '~/types/property-descriptor';
 import { HighlightedText } from '~/components/search/HighlightedText';
-import { useValidation } from '~/contexts/ValidationContext';
-import { SPECIAL_VALUES } from '~/types';
-import { splitIssues } from '~/features/validation/service';
 
 interface PropertyInputProps {
   property: PropertyDescriptor;
@@ -59,17 +49,6 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
   searchQuery,
   disabled = false,
 }) => {
-  // Extract validation rules for min/max
-  const rangeValidation = property.validationRules?.find((rule) => rule.type === 'range');
-  const { errors } = useValidation();
-
-  const queueIssues = errors[SPECIAL_VALUES.GLOBAL_QUEUE_PATH] ?? {};
-  const fieldIssues = queueIssues[property.name] ?? [];
-  const { errors: fieldErrors, warnings: fieldWarnings } = splitIssues(fieldIssues);
-  const errorMessages = fieldErrors.map((issue) => issue.message);
-  const warningMessages = fieldWarnings.map((issue) => issue.message);
-  const errorMessage = errorMessages.join(' ');
-  const warningMessage = warningMessages.join(' ');
   const isDisabled = disabled;
 
   const renderInput = () => {
@@ -97,12 +76,6 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
       </FieldDescription>
     ) : null;
 
-    const warningDescription = warningMessage ? (
-      <FieldDescription className="text-sm text-amber-600">{warningMessage}</FieldDescription>
-    ) : null;
-
-    const errorMessageNode = errorMessage ? <FieldMessage>{errorMessage}</FieldMessage> : null;
-
     switch (property.type) {
       case 'boolean':
         return (
@@ -113,23 +86,13 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
             labelProps={{
               className: cn(isDisabled && 'text-muted-foreground'),
             }}
-            description={
-              descriptionNode || warningMessage ? (
-                <>
-                  {descriptionNode ? <span className="block">{descriptionNode}</span> : null}
-                  {warningMessage ? (
-                    <span className="block text-amber-600 mt-1">{warningMessage}</span>
-                  ) : null}
-                </>
-              ) : null
-            }
+            description={descriptionNode}
             addon={stagedBadge}
             checked={value === 'true'}
             onCheckedChange={(checked) => {
               if (isDisabled) return;
               onChange(checked ? 'true' : 'false');
             }}
-            message={errorMessage || undefined}
           />
         );
 
@@ -199,8 +162,6 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
                 })}
               </div>
               {propertyDescription}
-              {warningDescription}
-              {errorMessageNode}
             </Field>
           );
         }
@@ -242,8 +203,6 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
               </SelectContent>
             </Select>
             {propertyDescription}
-            {warningDescription}
-            {errorMessageNode}
           </Field>
         );
       }
@@ -266,14 +225,12 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
                 type="number"
                 value={value || property.defaultValue || ''}
                 onChange={(e) => onChange(e.target.value)}
-                min={rangeValidation?.min}
-                max={rangeValidation?.max}
+                min={property.inputRange?.min}
+                max={property.inputRange?.max}
                 disabled={isDisabled}
               />
             </FieldControl>
             {propertyDescription}
-            {warningDescription}
-            {errorMessageNode}
           </Field>
         );
 
@@ -300,8 +257,6 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
               />
             </FieldControl>
             {propertyDescription}
-            {warningDescription}
-            {errorMessageNode}
           </Field>
         );
     }

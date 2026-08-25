@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -28,7 +27,6 @@ import { toast } from 'sonner';
 import { useValidation } from '~/contexts/ValidationContext';
 import { validateQueue, hasBlockingIssues, splitIssues } from '~/features/validation/service';
 import type { ValidationIssue } from '~/types';
-import { isBlockingError } from '~/features/validation/ruleCategories';
 import type { FieldErrors } from 'react-hook-form';
 
 type CombinedError = { type: string; message: string };
@@ -70,8 +68,6 @@ function mergeFormAndValidationErrors(
 
   return combined;
 }
-import { validatePropertyChange } from '~/features/validation/crossQueue';
-import { buildPropertyKey } from '~/utils/propertyUtils';
 import { CONFIG_PREFIXES } from '~/types';
 import { resolveInheritedValue, type InheritedValueInfo } from '~/utils/resolveInheritedValue';
 
@@ -463,16 +459,6 @@ export function usePropertyEditor({
 
       const pendingEntries = Object.entries(changedData);
 
-      const previewConfigData = new Map(configData);
-      pendingEntries.forEach(([propertyName, value]) => {
-        const propertyKey = buildPropertyKey(queuePath, propertyName);
-        if (!value.trim()) {
-          previewConfigData.delete(propertyKey);
-        } else {
-          previewConfigData.set(propertyKey, value);
-        }
-      });
-
       const queueValidation = validateQueue({
         queuePath,
         properties: changedData,
@@ -483,12 +469,8 @@ export function usePropertyEditor({
 
       replaceQueueIssues(queuePath, queueValidation.issues);
 
-      const blockingIssues = queueValidation.issues.filter((issue) =>
-        isBlockingError(issue.rule, issue.severity),
-      );
-
-      const nonBlockingIssues = queueValidation.issues.filter(
-        (issue) => !isBlockingError(issue.rule, issue.severity),
+      const { errors: blockingIssues, warnings: nonBlockingIssues } = splitIssues(
+        queueValidation.issues,
       );
 
       if (blockingIssues.length > 0) {
@@ -501,32 +483,7 @@ export function usePropertyEditor({
 
       pendingEntries.forEach(([propertyName, value]) => {
         const fieldIssues = nonBlockingIssues.filter((issue) => issue.field === propertyName);
-
-        const crossQueueIssues = validatePropertyChange({
-          propertyName,
-          propertyValue: value,
-          queuePath,
-          schedulerData,
-          configData: previewConfigData,
-          stagedChanges,
-          includeBlockingErrors: false,
-        });
-
-        const allIssues = [...fieldIssues, ...crossQueueIssues];
-
-        const uniqueIssues = allIssues.filter(
-          (issue, index, self) =>
-            index ===
-            self.findIndex(
-              (candidate) =>
-                candidate.queuePath === issue.queuePath &&
-                candidate.field === issue.field &&
-                candidate.message === issue.message &&
-                candidate.severity === issue.severity,
-            ),
-        );
-
-        stageChange(propertyName, value, uniqueIssues.length > 0 ? uniqueIssues : undefined);
+        stageChange(propertyName, value, fieldIssues.length > 0 ? fieldIssues : undefined);
         stagedCount += 1;
 
         if (propertyName === 'auto-queue-creation-v2.enabled' && value !== 'true') {

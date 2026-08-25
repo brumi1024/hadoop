@@ -6,10 +6,12 @@
  */
 
 import { AUTO_CREATION_PROPS, MUTATION_OPERATIONS, SPECIAL_VALUES } from '~/types';
-import type { SchedConfUpdateInfo, StagedChange } from '~/types';
+import type { SchedConfUpdateInfo, StagedChange, ValidationResponse } from '~/types';
 import { buildGlobalPropertyKey } from '~/utils/propertyUtils';
 
-const MUTATION_VERSION_PROPERTY_KEY = 'yarn.webservice.mutation-api.version';
+type SchedulerMutationClient = {
+  updateSchedulerConf: (mutation: SchedConfUpdateInfo) => Promise<ValidationResponse>;
+};
 
 /**
  * Get parent queues that need to be stopped when adding child queues.
@@ -135,62 +137,13 @@ export function prepareMutationRequestForSubmission(request: SchedConfUpdateInfo
 }
 
 /**
- * Add version information to a mutation request.
- */
-export function prepareMutationRequestWithVersion(
-  request: SchedConfUpdateInfo,
-  version?: string | number,
-): SchedConfUpdateInfo {
-  const clonedRequest = JSON.parse(JSON.stringify(request)) as SchedConfUpdateInfo;
-
-  const existingGlobalUpdates =
-    clonedRequest[MUTATION_OPERATIONS.GLOBAL_UPDATES]?.filter((block) => block.entry.length > 0) ??
-    [];
-
-  for (const block of existingGlobalUpdates) {
-    block.entry = block.entry.map(({ key, value }) => ({
-      key: buildGlobalPropertyKey(key),
-      value,
-    }));
-  }
-
-  if (version !== undefined) {
-    const versionValue = String(version);
-    let versionEntryUpdated = false;
-
-    for (const block of existingGlobalUpdates) {
-      const entry = block.entry.find((item) => item.key === MUTATION_VERSION_PROPERTY_KEY);
-      if (entry) {
-        entry.value = versionValue;
-        versionEntryUpdated = true;
-        break;
-      }
-    }
-
-    if (!versionEntryUpdated) {
-      existingGlobalUpdates.unshift({
-        entry: [{ key: MUTATION_VERSION_PROPERTY_KEY, value: versionValue }],
-      });
-    }
-  }
-
-  if (existingGlobalUpdates.length > 0) {
-    clonedRequest[MUTATION_OPERATIONS.GLOBAL_UPDATES] = existingGlobalUpdates;
-  } else {
-    delete clonedRequest[MUTATION_OPERATIONS.GLOBAL_UPDATES];
-  }
-
-  return clonedRequest;
-}
-
-/**
  * Apply queue states (STOPPED or RUNNING) via the API client.
  * Filters out root queue and empty queue names.
  */
 export async function applyQueueStates(
   queueNames: Iterable<string>,
   state: 'STOPPED' | 'RUNNING',
-  apiClient: { updateSchedulerConf: (mutation: SchedConfUpdateInfo) => Promise<void> },
+  apiClient: SchedulerMutationClient,
 ): Promise<void> {
   const uniqueQueueNames = Array.from(new Set(queueNames)).filter(
     (queueName) => queueName && queueName !== SPECIAL_VALUES.ROOT_QUEUE_NAME,
@@ -208,7 +161,14 @@ export async function applyQueueStates(
     ],
   };
 
-  await apiClient.updateSchedulerConf(stateMutation);
+  const response = await apiClient.updateSchedulerConf(stateMutation);
+  if (!response.validationResult.valid) {
+    const errors = response.validationResult.issues.issue
+      .filter((issue) => issue.severity === 'ERROR')
+      .map((issue) => issue.message)
+      .join('; ');
+    throw new Error(errors || `Failed to set queue state to ${state}`);
+  }
 }
 
 /**
@@ -265,7 +225,7 @@ export function addQueueHierarchyToSet(
  */
 export async function restartQueues(
   queueSet: Set<string>,
-  apiClient: { updateSchedulerConf: (mutation: SchedConfUpdateInfo) => Promise<void> },
+  apiClient: SchedulerMutationClient,
 ): Promise<void> {
   if (queueSet.size === 0) return;
 

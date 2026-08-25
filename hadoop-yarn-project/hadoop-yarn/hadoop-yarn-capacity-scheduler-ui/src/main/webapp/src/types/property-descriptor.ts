@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import type { QueueInfo } from './queue';
 import type { SchedulerInfo } from './scheduler';
 import type { StagedChange } from './staged-change';
@@ -98,7 +97,9 @@ export type InheritanceResolverContext = {
   stagedChanges?: StagedChange[];
 };
 
-export type InheritanceResolver = (context: InheritanceResolverContext) => InheritedValueInfo | null;
+export type InheritanceResolver = (
+  context: InheritanceResolverContext,
+) => InheritedValueInfo | null;
 
 export type PropertyDescriptor = {
   name: string;
@@ -109,6 +110,10 @@ export type PropertyDescriptor = {
   defaultValue: string;
   required: boolean;
   templateSupport?: boolean;
+  inputRange?: {
+    min?: number;
+    max?: number;
+  };
   validationRules?: ValidationRule[];
   enumValues?: PropertyEnumOption[];
   enumDisplay?: 'toggle' | 'choiceCard';

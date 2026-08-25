@@ -33,6 +33,7 @@ import type {
   NodesResponse,
   VersionResponse,
   YarnConfigResponse,
+  SchedulerValidationIssue,
   ValidationResponse,
 } from '~/types';
 import { HTTP_AUTH_PROPERTY, READ_ONLY_PROPERTY } from '~/config';
@@ -107,26 +108,38 @@ export class YarnApiClient {
   /**
    * PUT /scheduler-conf - Update configuration
    */
-  async updateSchedulerConf(updateInfo: SchedConfUpdateInfo): Promise<void> {
-    await this.request('PUT', '/scheduler-conf', {
+  async updateSchedulerConf(updateInfo: SchedConfUpdateInfo): Promise<ValidationResponse> {
+    return this.requestValidationResult('PUT', '/scheduler-conf', updateInfo);
+  }
+
+  private async requestValidationResult(
+    method: 'POST' | 'PUT',
+    path: string,
+    updateInfo: SchedConfUpdateInfo,
+  ): Promise<ValidationResponse> {
+    const response = await this.request<unknown>(method, path, {
       body: JSON.stringify(updateInfo),
       headers: {
         'Content-Type': 'application/json',
       },
-      expectJson: false,
+      acceptedErrorStatuses: [400],
     });
+
+    if (!isRawValidationResponse(response)) {
+      if (typeof response === 'string' && response.trim()) {
+        throw new Error(response.trim());
+      }
+      throw new Error('Invalid structured response from scheduler configuration mutation');
+    }
+
+    return normalizeValidationResponse(response);
   }
 
   /**
-   * POST /scheduler-conf/validate - Validate configuration changes
+   * POST /scheduler-conf/validate/v2 - Validate configuration changes
    */
   async validateSchedulerConf(updateInfo: SchedConfUpdateInfo): Promise<ValidationResponse> {
-    return this.request<ValidationResponse>('POST', '/scheduler-conf/validate', {
-      body: JSON.stringify(updateInfo),
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    return this.requestValidationResult('POST', '/scheduler-conf/validate/v2', updateInfo);
   }
 
   /**
@@ -294,7 +307,11 @@ export class YarnApiClient {
   private async request<T = void>(
     method: string,
     path: string,
-    options: RequestInit & { skipAuth?: boolean; expectJson?: boolean } = {},
+    options: RequestInit & {
+      skipAuth?: boolean;
+      expectJson?: boolean;
+      acceptedErrorStatuses?: number[];
+    } = {},
   ): Promise<T> {
     // Lazy initialization: Start detection on first request (ensures MSW is ready)
     if (this.initPromise === null && this.securityMode === null) {
@@ -321,7 +338,7 @@ export class YarnApiClient {
     }
 
     // Build URL by appending path to baseUrl
-    const { skipAuth, expectJson = true, ...fetchOptions } = options;
+    const { skipAuth, expectJson = true, acceptedErrorStatuses = [], ...fetchOptions } = options;
     let url = `${this.baseUrl}${path}`;
 
     // Add user.name parameter for simple auth mode (unless skipAuth is true)
@@ -345,12 +362,17 @@ export class YarnApiClient {
         },
       });
 
-      if (!response.ok) {
+      const isAcceptedError = acceptedErrorStatuses.includes(response.status);
+
+      if (!response.ok && !isAcceptedError) {
         await this.handleErrorResponse(response);
       }
 
       // Handle empty responses
       if (response.status === 204 || response.headers.get('content-length') === '0') {
+        if (isAcceptedError) {
+          await this.handleErrorResponse(response);
+        }
         return undefined as T;
       }
 
@@ -367,6 +389,10 @@ export class YarnApiClient {
             ? parseError
             : new Error('Failed to parse JSON response from YARN API.');
         }
+      }
+
+      if (isAcceptedError) {
+        await this.handleErrorResponse(response);
       }
 
       // Return empty for successful non-JSON responses
@@ -417,4 +443,49 @@ export class YarnApiClient {
 
     throw new Error(errorMessage);
   }
+}
+
+type RawValidationResponse = {
+  validationResult: {
+    valid: boolean;
+    configVersion: number;
+    issues: {
+      issue?: SchedulerValidationIssue[];
+    };
+  };
+};
+
+function isRawValidationResponse(value: unknown): value is RawValidationResponse {
+  if (!value || typeof value !== 'object' || !('validationResult' in value)) {
+    return false;
+  }
+
+  const result = (value as { validationResult?: unknown }).validationResult;
+  if (!result || typeof result !== 'object') {
+    return false;
+  }
+
+  const candidate = result as {
+    valid?: unknown;
+    configVersion?: unknown;
+    issues?: { issue?: unknown };
+  };
+
+  return (
+    typeof candidate.valid === 'boolean' &&
+    typeof candidate.configVersion === 'number' &&
+    Boolean(candidate.issues && typeof candidate.issues === 'object') &&
+    (candidate.issues?.issue === undefined || Array.isArray(candidate.issues.issue))
+  );
+}
+
+function normalizeValidationResponse(response: RawValidationResponse): ValidationResponse {
+  return {
+    validationResult: {
+      ...response.validationResult,
+      issues: {
+        issue: response.validationResult.issues.issue ?? [],
+      },
+    },
+  };
 }

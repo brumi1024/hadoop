@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect } from 'vitest';
 import type { MutationError, ValidationResponse } from '~/types/mutation';
 
@@ -53,38 +52,61 @@ describe('MutationError interface', () => {
 describe('ValidationResponse interface', () => {
   it('should accept successful validation response', () => {
     const validResponse: ValidationResponse = {
-      validation: 'success',
-      versionId: 12345,
+      validationResult: {
+        valid: true,
+        configVersion: 12345,
+        issues: { issue: [] },
+      },
     };
 
-    expect(validResponse.validation).toBe('success');
-    expect(validResponse.errors).toBeUndefined();
-    expect(validResponse.versionId).toBe(12345);
+    expect(validResponse.validationResult.valid).toBe(true);
+    expect(validResponse.validationResult.issues.issue).toHaveLength(0);
+    expect(validResponse.validationResult.configVersion).toBe(12345);
   });
 
   it('should accept validation failure response', () => {
     const invalidResponse: ValidationResponse = {
-      validation: 'failed',
-      errors: [
-        'Queue capacity for root.production children does not sum to 100%',
-        'Maximum capacity cannot be less than capacity for queue root.dev',
-      ],
-      mutationId: 'abc-123',
+      validationResult: {
+        valid: false,
+        configVersion: 12346,
+        issues: {
+          issue: [
+            {
+              queuePath: 'root.production',
+              propertyKey: 'capacity',
+              ruleId: 'capacity-sum',
+              severity: 'ERROR',
+              message: 'Queue capacities do not sum to 100%',
+            },
+          ],
+        },
+      },
     };
 
-    expect(invalidResponse.validation).toBe('failed');
-    expect(invalidResponse.errors).toHaveLength(2);
-    expect(invalidResponse.errors?.[0]).toContain('sum to 100%');
-    expect(invalidResponse.mutationId).toBe('abc-123');
+    expect(invalidResponse.validationResult.valid).toBe(false);
+    expect(invalidResponse.validationResult.issues.issue).toHaveLength(1);
+    expect(invalidResponse.validationResult.issues.issue[0].message).toContain('sum to 100%');
   });
 
-  it('should handle single validation error', () => {
-    const singleErrorResponse: ValidationResponse = {
-      validation: 'failed',
-      errors: ['Queue name cannot contain dots'],
+  it('should accept validation warnings', () => {
+    const warningResponse: ValidationResponse = {
+      validationResult: {
+        valid: true,
+        configVersion: 12347,
+        issues: {
+          issue: [
+            {
+              queuePath: 'root.wéird',
+              ruleId: 'queue-name',
+              severity: 'WARNING',
+              message: 'Queue name contains non-portable characters',
+            },
+          ],
+        },
+      },
     };
 
-    expect(singleErrorResponse.validation).toBe('failed');
-    expect(singleErrorResponse.errors).toHaveLength(1);
+    expect(warningResponse.validationResult.valid).toBe(true);
+    expect(warningResponse.validationResult.issues.issue[0].severity).toBe('WARNING');
   });
 });

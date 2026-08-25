@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   validateField,
   validateQueue,
+  validateStagedChanges,
   hasBlockingIssues,
   splitIssues,
 } from '~/features/validation/service';
@@ -596,6 +596,46 @@ describe('validation service', () => {
       });
 
       expect(mergeStagedConfig).toHaveBeenCalledWith(configData, stagedChanges);
+    });
+  });
+
+  describe('validateStagedChanges', () => {
+    it('validates each staged property without traversing related queues', () => {
+      const stagedChanges: StagedChange[] = [
+        {
+          id: 'capacity-change',
+          type: 'update',
+          queuePath: 'root.default',
+          property: 'capacity',
+          oldValue: '50',
+          newValue: '60',
+          timestamp: Date.now(),
+        },
+        {
+          id: 'queue-removal',
+          type: 'remove',
+          queuePath: 'root.old',
+          property: '__queue__',
+          timestamp: Date.now(),
+        },
+      ];
+      const issue: ValidationIssue = {
+        queuePath: 'root.default',
+        field: 'maximum-capacity',
+        message: 'Maximum capacity must be greater than or equal to capacity',
+        severity: 'error',
+        rule: 'max-capacity-minimum',
+      };
+      vi.mocked(runFieldValidation).mockReturnValueOnce([issue]);
+
+      const result = validateStagedChanges({
+        stagedChanges,
+        configData: new Map(),
+      });
+
+      expect(result.get('capacity-change')).toEqual([issue]);
+      expect(result.get('queue-removal')).toBeUndefined();
+      expect(runFieldValidation).toHaveBeenCalledTimes(1);
     });
   });
 

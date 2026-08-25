@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 export type MutationError = {
   RemoteException: {
     exception: string;
@@ -25,10 +24,22 @@ export type MutationError = {
   };
 };
 
+export type SchedulerValidationSeverity = 'ERROR' | 'WARNING';
+
+export type SchedulerValidationIssue = {
+  queuePath?: string | null;
+  propertyKey?: string | null;
+  ruleId: string;
+  severity: SchedulerValidationSeverity;
+  message: string;
+};
+
 export type ValidationResponse = {
-  validation: 'success' | 'failed';
-  errors?: string[];
-  versionId?: number | string;
-  mutationId?: number | string;
-  newVersionId?: number | string;
+  validationResult: {
+    valid: boolean;
+    configVersion: number;
+    issues: {
+      issue: SchedulerValidationIssue[];
+    };
+  };
 };

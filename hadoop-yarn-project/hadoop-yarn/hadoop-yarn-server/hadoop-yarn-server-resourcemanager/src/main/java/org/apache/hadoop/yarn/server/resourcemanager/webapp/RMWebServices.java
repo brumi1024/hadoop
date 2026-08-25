@@ -2891,8 +2891,8 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
           .entity("Configuration change only supported by mutable configuration store.").build();
     } else {
       try {
-        ValidationResult validation = callerUGI.doAs(
-            (PrivilegedExceptionAction<ValidationResult>) () -> {
+        AppliedMutation applied = callerUGI.doAs(
+            (PrivilegedExceptionAction<AppliedMutation>) () -> {
           MutableConfigurationProvider provider =
               ((MutableConfScheduler) scheduler).getMutableConfProvider();
           if (!provider.getAclMutationPolicy().isMutationAllowed(callerUGI,
@@ -2900,20 +2900,33 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
             throw new org.apache.hadoop.security.AccessControlException(
                 "User is not admin of all modified queues.");
           }
-          return provider.applyMutation(callerUGI, mutationInfo);
+          ValidationResult validation = provider.applyMutation(callerUGI,
+              mutationInfo);
+          return new AppliedMutation(validation, provider.getConfigVersion());
         });
-        if (!validation.isValid()) {
-          String errors = joinErrorIssues(validation);
+        ValidationResultInfo entity = ValidationResultInfo.from(
+            applied.result, applied.configVersion);
+        if (!applied.result.isValid()) {
+          String errors = joinErrorIssues(applied.result);
           LOG.warn("CapacityScheduler configuration mutation rejected: {}",
               errors);
-          return Response.status(Status.BAD_REQUEST).entity(errors).build();
+          return Response.status(Status.BAD_REQUEST).entity(entity).build();
         }
+        return Response.status(Status.OK).entity(entity).build();
       } catch (IOException e) {
         LOG.error("Exception thrown when modifying configuration.", e);
         return Response.status(Status.BAD_REQUEST).entity(e.getMessage()).build();
       }
-      return Response.status(Status.OK).entity("Configuration change successfully applied.")
-          .build();
+    }
+  }
+
+  private static final class AppliedMutation {
+    private final ValidationResult result;
+    private final long configVersion;
+
+    private AppliedMutation(ValidationResult result, long configVersion) {
+      this.result = result;
+      this.configVersion = configVersion;
     }
   }
 

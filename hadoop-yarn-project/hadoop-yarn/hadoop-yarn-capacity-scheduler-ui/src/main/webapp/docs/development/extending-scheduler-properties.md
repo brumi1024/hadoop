@@ -16,7 +16,6 @@
   limitations under the License.
 -->
 
-
 # Extending Scheduler Properties
 
 This guide explains how to make new Capacity Scheduler properties editable in the UI and how to plug them into the validation system. Follow the relevant section depending on whether you are working with global scheduler settings or queue-level configuration.
@@ -26,10 +25,9 @@ This guide explains how to make new Capacity Scheduler properties editable in th
 - `src/config/properties/global-properties.ts`: property descriptors that drive the Global Settings page.
 - `src/config/properties/queue-properties.ts`: queue-level descriptors used by the property editor, queue dialogs, and staged changes.
 - `src/config/schemas/validation.ts`: shared Zod helpers for common formats (capacity values, ACLs, percentages, etc.).
-- `src/config/validation-rules.ts`: declarative business-validation rules evaluated for both global and queue properties.
+- `src/config/validation-rules.ts`: queue-scoped cross-field rules for immediate editing feedback.
 - `src/contexts/ValidationContext.tsx`: React provider that keeps validation issues in sync with staged edits.
 - `src/features/validation/service.ts`: utility entry points (`validateField`, `validateQueue`) used by hooks and slices.
-- `src/features/validation/ruleCategories.ts`: maps rule IDs to blocking/non-blocking behavior.
 - `src/config/__tests__/propertyDefinitions.test.ts`: regression tests that assert descriptor consistency.
 
 ## Adding a global property
@@ -37,7 +35,8 @@ This guide explains how to make new Capacity Scheduler properties editable in th
 1. **Define the descriptor** in `src/config/properties/global-properties.ts`.
    - Use the fully qualified key (for example, `yarn.scheduler.capacity.maximum-applications`).
    - Populate `displayName`, `description`, `type`, `category`, `defaultValue`, and `required`.
-   - Use `validationRules` for field-level checks (`range`, `pattern`, or `custom`). Import helpers from `src/config/schemas/validation.ts` when possible so rules stay consistent.
+   - Use `inputRange` for HTML number-input affordances.
+   - The ResourceManager validates global property semantics when the mutation is submitted.
    - Supply `enumValues` when `type` is `enum`. Each option should provide `{ value, label, description? }`. Use `enumDisplay` to control the visual presentation: `choiceCard` for prominent cards or `toggle` for compact buttons (see below for guidance).
 
 - Use `displayFormat` to add user-friendly suffixes to numeric inputs.
@@ -159,8 +158,8 @@ type InheritanceResolverContext = {
 type InheritedValueInfo = {
   value: string;
   source: 'queue' | 'global';
-  sourcePath?: string;   // Parent queue path when source is 'queue'
-  isScaled?: boolean;     // True when the inherited value is scaled by queue capacity
+  sourcePath?: string; // Parent queue path when source is 'queue'
+  isScaled?: boolean; // True when the inherited value is scaled by queue capacity
 };
 
 type InheritanceResolver = (context: InheritanceResolverContext) => InheritedValueInfo | null;
@@ -218,33 +217,13 @@ import { getGlobalValue } from '~/utils/resolveInheritedValue';
 
 2. **Adjust the UI if needed.** The global settings form renders inputs based on `PropertyDescriptor.type`. For bespoke widgets, extend `src/features/global-settings/components/PropertyInput.tsx`.
 3. **Update tests.** Extend `src/config/__tests__/propertyDefinitions.test.ts` if you need coverage for descriptor metadata.
-4. **Verify** by running the app or unit tests (`npm run test`) and confirming the new field renders with the expected validation feedback.
+4. **Verify** by running the app or unit tests (`npm run test`) and confirming the new field renders and its mutation is accepted by ResourceManager validation.
 
-### Using the `useGlobalPropertyValidation` hook
+### Global property validation
 
-The `useGlobalPropertyValidation` hook provides validation for global-level properties. It's a simple wrapper around the validation context that uses the special `GLOBAL_QUEUE_PATH` identifier to validate properties at the scheduler level rather than the queue level.
-
-**API:**
-
-```ts
-const { validateGlobalProperty } = useGlobalPropertyValidation();
-const issues = validateGlobalProperty(propertyKey, value);
-```
-
-**Usage Example** (from `src/features/global-settings/components/GlobalSettings.tsx`):
-
-```ts
-import { useGlobalPropertyValidation } from '~/features/global-settings/hooks/useGlobalPropertyValidation';
-
-const { validateGlobalProperty } = useGlobalPropertyValidation();
-
-const handlePropertyChange = (propertyKey: string, value: string) => {
-  const validationErrors = validateGlobalProperty(propertyKey, value);
-  stageGlobalChange(propertyKey, value, validationErrors);
-};
-```
-
-The hook returns a `validateGlobalProperty` function that takes a property key and value, and returns an array of `ValidationIssue` objects.
+Global settings are staged directly.
+The ResourceManager validates their semantics through `POST /scheduler-conf/validate/v2` when the user applies the staged mutation.
+Do not add a second client-side implementation of a global scheduler rule.
 
 ## Adding a queue-level property
 
@@ -290,13 +269,16 @@ The validation pipeline has two layers that run automatically once descriptors a
 
 - The `validationRules` array on a descriptor is compiled into Zod validators inside `src/features/property-editor/hooks/usePropertyEditor.ts`.
 - Reuse the helpers in `src/config/schemas/validation.ts` whenever possible. Create new helpers there if the same rule will be reused by multiple properties.
-- For global properties, `useGlobalPropertyValidation` invokes the same pipeline using the `global` queue path, so no extra wiring is required.
+- Queue descriptor validation is for immediate syntax feedback.
+- Global descriptors use `inputRange` only as an HTML input affordance.
 
 ### Declarative business rules
 
-Cross-field and cross-queue logic lives in `src/config/validation-rules.ts`. To add or modify a rule:
+Queue-scoped cross-field logic lives in `src/config/validation-rules.ts`.
+Sibling, parent-child, queue-tree, global, and runtime-dependent rules belong in the ResourceManager validation engine.
+To add or modify a local rule:
 
-1. **Declare the rule** in the `QUEUE_VALIDATION_RULES` array (the name is historical; the same engine runs for global settings).
+1. **Declare the rule** in the `QUEUE_VALIDATION_RULES` array.
    ```ts
    {
      id: 'EXAMPLE_RULE',
@@ -320,10 +302,9 @@ Cross-field and cross-queue logic lives in `src/config/validation-rules.ts`. To 
      },
    }
    ```
-2. **Share utilities** by adding helpers in `src/features/validation/utils` when the logic is complex.
-3. **Categorize severity (optional).** If the rule’s outcome should be treated as non-blocking despite returning `severity: 'error'`, update `src/features/validation/ruleCategories.ts` so `isBlockingError` reflects the desired behavior.
-4. **Surface to the UI.** The `ValidationContext` automatically merges new rule output. Field-level components read `ValidationIssue[]` through `useValidation`, so no extra wiring is required beyond returning the correct `rule` ID and `severity`.
-5. **Test it.** Add unit tests near the rule implementation (for example, under `src/config/__tests__` or a new `*.test.ts` beside the helper) and run `npm run test`.
+2. **Keep the scope local.** Structural, scheduler-wide, or runtime-dependent rules belong in the ResourceManager validation engine.
+3. **Surface to the UI.** The `ValidationContext` automatically merges new rule output. Field-level components read `ValidationIssue[]` through `useValidation`, so no extra wiring is required beyond returning the correct `rule` ID and `severity`.
+4. **Test it.** Add unit tests near the rule implementation (for example, under `src/config/__tests__` or a new `*.test.ts` beside the helper) and run `npm run test`.
 
 ### Property condition utilities
 

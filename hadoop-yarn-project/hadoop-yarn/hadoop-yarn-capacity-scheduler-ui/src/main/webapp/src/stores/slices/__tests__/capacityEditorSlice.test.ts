@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createSchedulerStore } from '~/stores/schedulerStore';
 import { YarnApiClient } from '~/lib/api/YarnApiClient';
@@ -34,6 +33,7 @@ vi.mock('~/features/queue-management/utils/capacityEditor', () => ({
 
 vi.mock('~/features/validation/service', () => ({
   validateQueue: vi.fn(),
+  validateStagedChanges: vi.fn(() => new Map()),
 }));
 
 import {

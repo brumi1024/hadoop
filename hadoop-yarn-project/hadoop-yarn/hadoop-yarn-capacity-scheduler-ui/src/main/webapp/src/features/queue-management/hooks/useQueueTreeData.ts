@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import type { Node, Edge } from '@xyflow/react';
 import { useSchedulerStore } from '~/stores/schedulerStore';
 import type {
@@ -47,8 +46,6 @@ export type QueueCardData = QueueInfo & {
   autoCreationEligibility?: string;
   autoCreationStatus?: { status: 'off' | 'legacy' | 'flexible'; isStaged: boolean };
   validationErrors?: ValidationIssue[];
-  isAffectedByErrors?: boolean;
-  errorSource?: string;
   isAutoCreatedQueue: boolean;
 };
 
@@ -256,31 +253,10 @@ function transformToCardData(queueInfo: QueueInfo, stagedChanges: StagedChange[]
 
   // Collect validation errors for this queue
   const directErrors: ValidationIssue[] = [];
-  let isAffectedByErrors = false;
-  let errorSource: string | undefined;
 
   stagedChanges.forEach((change) => {
-    if (change.validationErrors && change.validationErrors.length > 0) {
-      // Check if this queue has direct errors
-      if (change.queuePath === queueInfo.queuePath) {
-        directErrors.push(...change.validationErrors);
-      } else {
-        // Check if this queue is affected by errors from other queues
-        // For capacity sum errors, the parent queue is affected by child changes
-        change.validationErrors.forEach((error) => {
-          if (error.rule === 'child-capacity-sum' || error.rule === 'capacity-type-consistency') {
-            // Get parent path of the changed queue
-            const changedQueueParts = change.queuePath.split('.');
-            if (changedQueueParts.length > 1) {
-              const parentPath = changedQueueParts.slice(0, -1).join('.');
-              if (parentPath === queueInfo.queuePath) {
-                isAffectedByErrors = true;
-                errorSource = change.queuePath;
-              }
-            }
-          }
-        });
-      }
+    if (change.queuePath === queueInfo.queuePath && change.validationErrors) {
+      directErrors.push(...change.validationErrors);
     }
   });
 
@@ -309,8 +285,6 @@ function transformToCardData(queueInfo: QueueInfo, stagedChanges: StagedChange[]
       queueInfo.creationMethod === 'dynamicFlexible',
 
     validationErrors: directErrors.length > 0 ? directErrors : undefined,
-    isAffectedByErrors,
-    errorSource,
   };
 }
 

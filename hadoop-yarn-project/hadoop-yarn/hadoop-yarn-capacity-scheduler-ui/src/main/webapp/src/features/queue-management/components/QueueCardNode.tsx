@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React, { useState } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { useShallow } from 'zustand/react/shallow';
@@ -100,8 +99,6 @@ export const QueueCardNode: React.FC<NodeProps> = ({ data }) => {
     stagedState,
     autoCreationStatus,
     validationErrors,
-    isAffectedByErrors,
-    errorSource,
     creationMethod,
     isAutoCreatedQueue,
   } = queueData;
@@ -164,7 +161,6 @@ export const QueueCardNode: React.FC<NodeProps> = ({ data }) => {
     isSelectedQueue,
     isSelectedForComparison,
     validationErrors,
-    isAffectedByErrors,
     shouldGrayOut,
   });
 
@@ -212,11 +208,7 @@ export const QueueCardNode: React.FC<NodeProps> = ({ data }) => {
             </CardDescription>
           </div>
 
-          <QueueValidationBadges
-            validationErrors={validationErrors}
-            isAffectedByErrors={isAffectedByErrors}
-            errorSource={errorSource}
-          />
+          <QueueValidationBadges validationErrors={validationErrors} />
         </div>
 
         {isComparisonModeActive && (

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect } from 'vitest';
 import { isLeafQueue, isParentQueue, isValidQueueName } from '~/types';
 import type { QueueInfo } from '~/types';
@@ -95,6 +94,8 @@ describe('Type Guards', () => {
       expect(isValidQueueName('batch_jobs')).toBe(true);
       expect(isValidQueueName('GPU')).toBe(true);
       expect(isValidQueueName('a')).toBe(true);
+      expect(isValidQueueName('münchen')).toBe(true);
+      expect(isValidQueueName('a'.repeat(51))).toBe(true);
     });
 
     it('should reject queue names with dots', () => {
@@ -106,8 +107,8 @@ describe('Type Guards', () => {
     it('should reject empty or invalid names', () => {
       expect(isValidQueueName('')).toBe(false);
       expect(isValidQueueName(' ')).toBe(false);
-      expect(isValidQueueName('queue name')).toBe(false); // spaces not allowed
-      expect(isValidQueueName('queue@special')).toBe(false);
+      expect(isValidQueueName(' queue')).toBe(false);
+      expect(isValidQueueName('queue ')).toBe(false);
     });
   });
 });

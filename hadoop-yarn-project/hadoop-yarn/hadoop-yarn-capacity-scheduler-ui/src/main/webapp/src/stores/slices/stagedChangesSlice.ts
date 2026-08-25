@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Staged changes slice - handles all change management operations
  */
@@ -24,7 +23,12 @@
 import type { StateCreator } from 'zustand';
 import { nanoid } from 'nanoid';
 import { AUTO_CREATION_PROPS, MUTATION_OPERATIONS, SPECIAL_VALUES } from '~/types';
-import type { SchedConfUpdateInfo, StagedChange, ValidationIssue } from '~/types';
+import type {
+  SchedConfUpdateInfo,
+  SchedulerValidationIssue,
+  StagedChange,
+  ValidationIssue,
+} from '~/types';
 import {
   buildGlobalPropertyKey,
   buildNodeLabelPropertyKey,
@@ -36,17 +40,15 @@ import {
   getQueuesForRemoval,
   getQueuesForAutoCreationEnable,
   prepareMutationRequestForSubmission,
-  prepareMutationRequestWithVersion,
   applyQueueStates,
   addQueueHierarchyToSet,
   restartQueues,
 } from '~/features/staged-changes/utils/queueStateManager';
-import { isValidQueueName } from '~/types';
+import { getQueueNameValidationError } from '~/types';
 import { createStoreError, ERROR_CODES, extractErrorMessage, isNetworkError } from '~/lib/errors';
 import { assertWritable } from '~/lib/errors/readOnlyGuard';
 import type { StagedChangesSlice, SchedulerStore } from './types';
-import { getAffectedQueuesForValidation } from '~/features/validation/utils/affectedQueues';
-import { validateStagedChanges, validatePropertyChange } from '~/features/validation/crossQueue';
+import { validateField, validateStagedChanges } from '~/features/validation/service';
 
 type MutationErrorState = Pick<SchedulerStore, 'applyError' | 'error' | 'errorContext'>;
 const clearMutationError = (state: MutationErrorState) => {
@@ -57,6 +59,14 @@ const clearMutationError = (state: MutationErrorState) => {
     state.error = null;
     state.errorContext = null;
   }
+};
+
+const formatSchedulerValidationIssue = (issue: SchedulerValidationIssue): string => {
+  const target = [issue.queuePath, issue.propertyKey ? `(${issue.propertyKey})` : null]
+    .filter(Boolean)
+    .join(' ');
+
+  return target ? `${target}: ${issue.message}` : issue.message;
 };
 
 export const createStagedChangesSlice: StateCreator<
@@ -176,10 +186,11 @@ export const createStagedChangesSlice: StateCreator<
   },
 
   stageQueueAddition: (parentPath, queueName, config, validationErrors) => {
-    if (!isValidQueueName(queueName)) {
+    const queueNameError = getQueueNameValidationError(queueName);
+    if (queueNameError) {
       throw createStoreError(
         ERROR_CODES.INVALID_QUEUE_NAME,
-        `Invalid queue name: "${queueName}". Queue names must contain only letters, numbers, hyphens, and underscores.`,
+        `Invalid queue name: "${queueName}". ${queueNameError}`,
       );
     }
 
@@ -209,15 +220,14 @@ export const createStagedChangesSlice: StateCreator<
 
     const computedCapacityErrors =
       typeof capacityValue === 'string'
-        ? validatePropertyChange({
-            propertyName: 'capacity',
-            propertyValue: capacityValue,
+        ? validateField({
+            fieldName: 'capacity',
+            value: capacityValue,
             queuePath: newQueuePath,
             schedulerData,
             configData,
             stagedChanges: previewStagedChanges,
-            includeBlockingErrors: true,
-          })
+          }).issues
         : [];
 
     set((state) => {
@@ -424,21 +434,18 @@ export const createStagedChangesSlice: StateCreator<
         await applyQueueStates(allQueuesToStop, 'STOPPED', apiClient);
       }
 
-      const validationResponse = await apiClient.validateSchedulerConf(submissionRequest);
+      const mutationResponse = await apiClient.updateSchedulerConf(submissionRequest);
+      const { valid, issues } = mutationResponse.validationResult;
 
-      if (validationResponse.validation === 'failed') {
-        const validationMessage = validationResponse.errors?.join('; ').trim();
+      if (!valid) {
+        const validationMessage = issues.issue
+          .filter((issue) => issue.severity === 'ERROR')
+          .map(formatSchedulerValidationIssue)
+          .join('; ')
+          .trim();
         throw new Error(validationMessage || 'Scheduler configuration validation failed');
       }
 
-      const mutationVersion =
-        validationResponse.versionId ??
-        validationResponse.mutationId ??
-        validationResponse.newVersionId;
-
-      const finalMutation = prepareMutationRequestWithVersion(submissionRequest, mutationVersion);
-
-      await apiClient.updateSchedulerConf(finalMutation);
       mutationApplied = true;
 
       await restartParents();
@@ -562,11 +569,10 @@ export const createStagedChangesSlice: StateCreator<
   refreshValidationErrors: () => {
     const { stagedChanges, schedulerData, configData } = get();
 
-    if (!schedulerData || stagedChanges.length === 0) {
+    if (stagedChanges.length === 0) {
       return;
     }
 
-    // Validate all staged changes using the unified validation function
     const validationResults = validateStagedChanges({
       stagedChanges,
       schedulerData,
@@ -574,7 +580,6 @@ export const createStagedChangesSlice: StateCreator<
     });
 
     set((state) => {
-      // Update each staged change with its validation errors
       state.stagedChanges = state.stagedChanges.map((change) => ({
         ...change,
         validationErrors: validationResults.get(change.id),
@@ -582,55 +587,16 @@ export const createStagedChangesSlice: StateCreator<
     });
   },
 
-  refreshAffectedValidationErrors: (triggeringQueuePath: string, triggeringProperty: string) => {
-    const { stagedChanges, schedulerData, configData } = get();
+  refreshAffectedValidationErrors: (queuePath, property) => {
+    const affectsLocalValidation =
+      property === 'capacity' ||
+      property === 'maximum-capacity' ||
+      property === AUTO_CREATION_PROPS.FLEXIBLE_ENABLED ||
+      (queuePath === SPECIAL_VALUES.GLOBAL_QUEUE_PATH &&
+        property === SPECIAL_VALUES.LEGACY_MODE_PROPERTY);
 
-    if (!schedulerData || stagedChanges.length === 0) {
-      return;
+    if (affectsLocalValidation) {
+      get().refreshValidationErrors();
     }
-
-    // Determine which queues and properties could be affected
-    const affectedQueues = getAffectedQueuesForValidation(
-      triggeringProperty,
-      triggeringQueuePath,
-      schedulerData,
-      stagedChanges,
-    );
-
-    const affectedQueuePaths = new Set(affectedQueues);
-    const affectedProperties = new Set<string>();
-
-    // Some properties affect validation of other properties
-    if (triggeringProperty === 'capacity') {
-      affectedProperties.add('capacity');
-      affectedProperties.add('maximum-capacity');
-    } else if (triggeringProperty === SPECIAL_VALUES.LEGACY_MODE_PROPERTY) {
-      // Legacy mode affects all capacity validations
-      affectedProperties.add('capacity');
-      affectedProperties.add('maximum-capacity');
-      // Need to re-validate all queues when legacy mode changes
-      stagedChanges.forEach((change) => {
-        if (change.queuePath) {
-          affectedQueuePaths.add(change.queuePath);
-        }
-      });
-    }
-
-    // Selectively validate only affected changes using the unified validation function
-    const validationResults = validateStagedChanges({
-      stagedChanges,
-      schedulerData,
-      configData,
-      affectedQueuePaths,
-      affectedProperties,
-    });
-
-    set((state) => {
-      // Update each staged change with its validation errors
-      state.stagedChanges = state.stagedChanges.map((change) => ({
-        ...change,
-        validationErrors: validationResults.get(change.id),
-      }));
-    });
   },
 });

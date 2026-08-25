@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect } from 'vitest';
 import { queuePropertyDefinitions } from '~/config/properties/queue-properties';
 import {
@@ -732,6 +731,23 @@ describe('propertyDefinitions', () => {
             option.value === 'org.apache.hadoop.yarn.util.resource.DominantResourceCalculator',
         ),
       ).toBe(true);
+    });
+
+    it('leaves global semantic validation to the ResourceManager', () => {
+      expect(
+        globalPropertyDefinitions.every((property) => property.validationRules === undefined),
+      ).toBe(true);
+    });
+
+    it('keeps numeric input ranges as browser affordances', () => {
+      const maximumApplications = globalPropertyDefinitions.find(
+        (property) => property.name === `${CONFIG_PREFIXES.BASE}.maximum-applications`,
+      );
+
+      expect(maximumApplications?.inputRange).toEqual({
+        min: 0,
+        max: 2147483647,
+      });
     });
   });
 

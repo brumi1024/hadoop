@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { useSchedulerStore } from '~/stores/schedulerStore';
 import { SPECIAL_VALUES } from '~/types';
 
@@ -35,10 +34,6 @@ export function useQueueActions(): UseQueueActionsResult {
   const getQueueByPath = useSchedulerStore((state) => state.getQueueByPath);
 
   const addChildQueue = (parentPath: string, queueName: string, config: Record<string, string>) => {
-    if (queueName.includes('.')) {
-      throw new Error('Queue name cannot contain dots');
-    }
-
     const parent = getQueueByPath(parentPath);
     if (!parent) {
       throw new Error('Parent queue not found');

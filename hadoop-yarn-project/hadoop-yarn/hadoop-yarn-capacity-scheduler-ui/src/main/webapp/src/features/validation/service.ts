@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import {
   mergeStagedConfig,
   applyFieldPreview,
@@ -54,6 +53,12 @@ export interface ValidationResult {
   issues: ValidationIssue[];
 }
 
+export interface ValidateStagedChangesOptions {
+  stagedChanges: StagedChange[];
+  configData: Map<string, string>;
+  schedulerData?: SchedulerInfo | null;
+}
+
 export function validateField(options: FieldValidationOptions): ValidationResult {
   const { queuePath, fieldName, value, configData, stagedChanges, schedulerData } = options;
 
@@ -66,6 +71,7 @@ export function validateField(options: FieldValidationOptions): ValidationResult
       fieldName,
       fieldValue: value,
       config: effectiveConfig,
+      originalConfig: configData,
       schedulerData,
       stagedChanges,
     }),
@@ -110,6 +116,7 @@ export function validateQueue(options: QueueValidationOptions): ValidationResult
       fieldName: field,
       fieldValue,
       config: effectiveConfig,
+      originalConfig: configData,
       schedulerData,
       stagedChanges,
     });
@@ -123,15 +130,48 @@ export function validateQueue(options: QueueValidationOptions): ValidationResult
   };
 }
 
+export function validateStagedChanges({
+  stagedChanges,
+  configData,
+  schedulerData,
+}: ValidateStagedChangesOptions): Map<string, ValidationIssue[] | undefined> {
+  const results = new Map<string, ValidationIssue[] | undefined>();
+
+  stagedChanges.forEach((change) => {
+    if (
+      (change.type !== 'add' && change.type !== 'update') ||
+      (change.property !== 'capacity' && change.property !== 'maximum-capacity')
+    ) {
+      results.set(change.id, undefined);
+      return;
+    }
+
+    const validation = validateField({
+      queuePath: change.queuePath,
+      fieldName: change.property,
+      value: change.newValue ?? '',
+      configData,
+      stagedChanges: stagedChanges.filter((candidate) => candidate.id !== change.id),
+      schedulerData,
+    });
+
+    results.set(change.id, validation.issues.length > 0 ? validation.issues : undefined);
+  });
+
+  return results;
+}
+
 function buildRuleContext(params: {
   queuePath: string;
   fieldName: string;
   fieldValue: unknown;
   config: Map<string, string>;
+  originalConfig: Map<string, string>;
   schedulerData?: SchedulerInfo | null;
   stagedChanges: StagedChange[];
 }): RuleContext {
-  const { queuePath, fieldName, fieldValue, config, schedulerData, stagedChanges } = params;
+  const { queuePath, fieldName, fieldValue, config, originalConfig, schedulerData, stagedChanges } =
+    params;
   const legacyModeEnabled = config.get(SPECIAL_VALUES.LEGACY_MODE_PROPERTY) !== 'false';
 
   return {
@@ -139,6 +179,7 @@ function buildRuleContext(params: {
     fieldName,
     fieldValue,
     config,
+    originalConfig,
     schedulerData,
     stagedChanges,
     legacyModeEnabled,

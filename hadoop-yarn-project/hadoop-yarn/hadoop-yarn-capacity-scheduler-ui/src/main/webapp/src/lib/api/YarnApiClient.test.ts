@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
 import { setupServer } from 'msw/node';
 import { http, HttpResponse, delay } from 'msw';
@@ -239,7 +238,13 @@ describe('YarnApiClient', () => {
     it('should update configuration successfully', async () => {
       server.use(
         http.put('*/ws/v1/cluster/scheduler-conf', () => {
-          return new HttpResponse(null, { status: 200 });
+          return HttpResponse.json({
+            validationResult: {
+              valid: true,
+              configVersion: 13,
+              issues: { issue: [] },
+            },
+          });
         }),
       );
 
@@ -267,7 +272,13 @@ describe('YarnApiClient', () => {
       server.use(
         http.put('*/ws/v1/cluster/scheduler-conf', ({ request }) => {
           capturedHeaders = request.headers;
-          return new HttpResponse(null, { status: 200 });
+          return HttpResponse.json({
+            validationResult: {
+              valid: true,
+              configVersion: 13,
+              issues: { issue: [] },
+            },
+          });
         }),
       );
 
@@ -285,7 +296,13 @@ describe('YarnApiClient', () => {
       server.use(
         http.put('*/ws/v1/cluster/scheduler-conf', async ({ request }) => {
           capturedBody = (await request.json()) as SchedConfUpdateInfo;
-          return new HttpResponse(null, { status: 200 });
+          return HttpResponse.json({
+            validationResult: {
+              valid: true,
+              configVersion: 13,
+              issues: { issue: [] },
+            },
+          });
         }),
       );
 
@@ -336,8 +353,14 @@ describe('YarnApiClient', () => {
   describe('validateSchedulerConf', () => {
     it('should validate configuration successfully', async () => {
       server.use(
-        http.post('*/ws/v1/cluster/scheduler-conf/validate', () => {
-          return HttpResponse.json({ validation: 'success' });
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () => {
+          return HttpResponse.json({
+            validationResult: {
+              valid: true,
+              configVersion: 12,
+              issues: { issue: [] },
+            },
+          });
         }),
       );
 
@@ -352,17 +375,64 @@ describe('YarnApiClient', () => {
       };
 
       await expect(client.validateSchedulerConf(updateRequest)).resolves.toEqual({
-        validation: 'success',
+        validationResult: {
+          valid: true,
+          configVersion: 12,
+          issues: { issue: [] },
+        },
       });
     });
 
-    it('should pass through request body correctly', async () => {
+    it('should normalize an empty issues wrapper', async () => {
+      server.use(
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () => {
+          return HttpResponse.json({
+            validationResult: {
+              valid: true,
+              configVersion: 12,
+              issues: {},
+            },
+          });
+        }),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.validateSchedulerConf({})).resolves.toEqual({
+        validationResult: {
+          valid: true,
+          configVersion: 12,
+          issues: { issue: [] },
+        },
+      });
+    });
+
+    it('should return structured issues from a 400 validation response', async () => {
       let capturedBody: SchedConfUpdateInfo | undefined;
 
       server.use(
-        http.post('*/ws/v1/cluster/scheduler-conf/validate', async ({ request }) => {
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', async ({ request }) => {
           capturedBody = (await request.json()) as SchedConfUpdateInfo;
-          return HttpResponse.json({ validation: 'failed', errors: ['oops'] });
+          return HttpResponse.json(
+            {
+              validationResult: {
+                valid: false,
+                configVersion: 13,
+                issues: {
+                  issue: [
+                    {
+                      queuePath: 'root.newqueue',
+                      propertyKey: 'capacity',
+                      ruleId: 'CS_CAPACITY_SUM',
+                      severity: 'ERROR',
+                      message: 'Child queue capacities must sum to 100%',
+                    },
+                  ],
+                },
+              },
+            },
+            { status: 400 },
+          );
         }),
       );
 
@@ -383,7 +453,29 @@ describe('YarnApiClient', () => {
 
       const response = await client.validateSchedulerConf(validationRequest);
       expect(capturedBody).toEqual(validationRequest);
-      expect(response).toEqual({ validation: 'failed', errors: ['oops'] });
+      expect(response.validationResult).toEqual(
+        expect.objectContaining({
+          valid: false,
+          configVersion: 13,
+        }),
+      );
+      expect(response.validationResult.issues.issue).toHaveLength(1);
+    });
+
+    it('should surface an unstructured endpoint failure', async () => {
+      server.use(
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () => {
+          return HttpResponse.json('Mutable configuration provider is required', {
+            status: 400,
+          });
+        }),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.validateSchedulerConf({})).rejects.toThrow(
+        'Mutable configuration provider is required',
+      );
     });
   });
 
@@ -688,7 +780,7 @@ describe('YarnApiClient', () => {
   });
 
   describe('edge cases and special scenarios', () => {
-    it('should handle empty response body for successful mutations', async () => {
+    it('should reject an empty response body for successful mutations', async () => {
       server.use(
         http.put('*/ws/v1/cluster/scheduler-conf', () => {
           return new HttpResponse('', { status: 200 });
@@ -700,7 +792,7 @@ describe('YarnApiClient', () => {
         client.updateSchedulerConf({
           'global-updates': [{ entry: [{ key: 'test', value: 'value' }] }],
         }),
-      ).resolves.not.toThrow();
+      ).rejects.toThrow('Invalid structured response');
     });
 
     it('should preserve queue paths with special characters', async () => {

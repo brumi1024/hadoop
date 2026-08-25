@@ -1002,16 +1002,9 @@ public class TestRMWebServicesConfigurationMutation
   }
 
   @Test
-  public void testValidationVersionCanPrecedePut() throws Exception {
-    WebTarget endpoint = validationV2Endpoint();
-    Response validation = endpoint.request(MediaType.APPLICATION_JSON)
-        .post(Entity.entity(new SchedConfUpdateInfo(),
-            MediaType.APPLICATION_JSON), Response.class);
-    assertEquals(Status.OK.getStatusCode(), validation.getStatus());
-    long version = new JSONObject(validation.readEntity(String.class))
-        .getJSONObject("validationResult").getLong("configVersion");
-    assertEquals(version, getConfigVersion());
-
+  public void testPutReturnsStructuredValidationAndNewVersion()
+      throws Exception {
+    long version = getConfigVersion();
     SchedConfUpdateInfo updateInfo = new SchedConfUpdateInfo();
     Map<String, String> properties = new HashMap<>();
     properties.put(CAPACITY, "1");
@@ -1020,15 +1013,38 @@ public class TestRMWebServicesConfigurationMutation
     updateProperties.put(CAPACITY, "74");
     updateInfo.getUpdateQueueInfo().add(
         new QueueConfigInfo("root.b", updateProperties));
-    Response put = target().register(new IncludeRootJSONProvider())
-        .register(new ExcludeRootJSONProvider())
-        .path("ws").path("v1").path("cluster").path("scheduler-conf")
-        .queryParam("user.name", userName)
-        .request(MediaType.APPLICATION_JSON)
+    Response put = mutationEndpoint().request(MediaType.APPLICATION_JSON)
         .put(Entity.entity(updateInfo, MediaType.APPLICATION_JSON),
             Response.class);
     assertEquals(Status.OK.getStatusCode(), put.getStatus());
+    JSONObject result = new JSONObject(put.readEntity(String.class))
+        .getJSONObject("validationResult");
+    assertTrue(result.getBoolean("valid"));
+    assertEquals(version + 1, result.getLong("configVersion"));
+    assertTrue(result.has("issues"));
     assertEquals(version + 1, getConfigVersion());
+  }
+
+  @Test
+  public void testPutReturnsStructuredIssuesWithoutMutation()
+      throws Exception {
+    long version = getConfigVersion();
+    SchedConfUpdateInfo updateInfo = new SchedConfUpdateInfo();
+    updateInfo.getGlobalParams().put(
+        YarnConfiguration.RM_SCHEDULER_MINIMUM_ALLOCATION_MB,
+        "not-an-integer");
+
+    Response put = mutationEndpoint().request(MediaType.APPLICATION_JSON)
+        .put(Entity.entity(updateInfo, MediaType.APPLICATION_JSON),
+            Response.class);
+    assertEquals(Status.BAD_REQUEST.getStatusCode(), put.getStatus());
+    JSONObject result = new JSONObject(put.readEntity(String.class))
+        .getJSONObject("validationResult");
+    assertFalse(result.getBoolean("valid"));
+    assertEquals(version, result.getLong("configVersion"));
+    assertTrue(result.getJSONObject("issues").getJSONArray("issue")
+        .toString().contains("memory-allocation"));
+    assertEquals(version, getConfigVersion());
   }
 
   @Test
@@ -1119,6 +1135,14 @@ public class TestRMWebServicesConfigurationMutation
         .register(new ExcludeRootJSONProvider())
         .path("ws").path("v1").path("cluster")
         .path(RMWSConsts.SCHEDULER_CONF_VALIDATE_V2)
+        .queryParam("user.name", userName);
+  }
+
+  private WebTarget mutationEndpoint() {
+    return target().register(new IncludeRootJSONProvider())
+        .register(new ExcludeRootJSONProvider())
+        .path("ws").path("v1").path("cluster")
+        .path(RMWSConsts.SCHEDULER_CONF)
         .queryParam("user.name", userName);
   }
 

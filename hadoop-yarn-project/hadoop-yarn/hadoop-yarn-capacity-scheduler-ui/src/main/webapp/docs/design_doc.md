@@ -16,7 +16,6 @@
   limitations under the License.
 -->
 
-
 # YARN Scheduler UI - Design Document
 
 > **JIRA**: [YARN-11885](https://issues.apache.org/jira/browse/YARN-11885)
@@ -30,51 +29,51 @@ The **YARN Capacity Scheduler UI** is a modern web interface for managing Apache
 ### Main Features
 
 1. **Visual Queue Tree Management**
-    - Interactive, draggable, zoomable tree visualization using XYFlow
-    - Create, edit, and delete queues with real-time validation
-    - Configure queue properties: capacities (percentage/weight/absolute), states, ACLs, resource limits
-    - Visual capacity indicators and resource statistics
-    - Queue search with highlighting
+   - Interactive, draggable, zoomable tree visualization using XYFlow
+   - Create, edit, and delete queues with real-time validation
+   - Configure queue properties: capacities (percentage/weight/absolute), states, ACLs, resource limits
+   - Visual capacity indicators and resource statistics
+   - Queue search with highlighting
 
 2. **Placement Rules Editor**
-    - Guided forms for authoring placement rules
-    - Support for multiple rule types (user, group, application name, etc.)
-    - Drag-and-drop rule ordering and priority management
-    - Migration from legacy placement rules to new format
-    - Validation before applying updates
+   - Guided forms for authoring placement rules
+   - Support for multiple rule types (user, group, application name, etc.)
+   - Drag-and-drop rule ordering and priority management
+   - Migration from legacy placement rules to new format
+   - Validation before applying updates
 
 3. **Staged Changes System**
-    - Review all pending configuration edits in a unified panel
-    - Apply changes in batches or revert individual changes
-    - Side-by-side comparison of staged vs live configuration
-    - Visual highlighting of configuration deltas
-    - Validation errors displayed per change
+   - Review all pending configuration edits in a unified panel
+   - Apply changes in batches or revert individual changes
+   - Side-by-side comparison of staged vs live configuration
+   - Visual highlighting of configuration deltas
+   - Validation errors displayed per change
 
 4. **Node Labels & Partitions**
-    - Create and manage node labels (resource partitions)
-    - Assign nodes to labels with bulk operations
-    - Configure per-label capacity settings for queues
-    - View node-to-label and label-to-node mappings
+   - Create and manage node labels (resource partitions)
+   - Assign nodes to labels with bulk operations
+   - Configure per-label capacity settings for queues
+   - View node-to-label and label-to-node mappings
 
 5. **Real-Time Validation System**
-    - Property-level validation during editing
-    - Cross-queue dependency validation (sibling capacities, parent-child constraints)
-    - Warning and error severity levels
-    - Blocks applying changes until errors are resolved
-    - Clear error messages with affected queues highlighted
+   - Property-level validation during editing
+   - Cross-queue dependency validation (sibling capacities, parent-child constraints)
+   - Warning and error severity levels
+   - Blocks applying changes until errors are resolved
+   - Clear error messages with affected queues highlighted
 
 6. **Global Scheduler Settings**
-    - Configure cluster-wide scheduler properties
-    - Resource calculator selection (memory-only vs dominant resource)
-    - Application limits and scheduling behavior
-    - Preemption policies and async scheduling settings
-    - Legacy mode toggle and capacity configuration modes
+   - Configure cluster-wide scheduler properties
+   - Resource calculator selection (memory-only vs dominant resource)
+   - Application limits and scheduling behavior
+   - Preemption policies and async scheduling settings
+   - Legacy mode toggle and capacity configuration modes
 
 7. **Read-Only Mode Support**
-    - Configurable read-only mode via YARN property (`yarn.webapp.scheduler-ui.read-only.enable`)
-    - Users can stage and validate changes but cannot apply them
-    - Visual indicators (lock icon, disabled buttons) in UI
-    - Useful for production environments with restricted access
+   - Configurable read-only mode via YARN property (`yarn.webapp.scheduler-ui.read-only.enable`)
+   - Users can stage and validate changes but cannot apply them
+   - Visual indicators (lock icon, disabled buttons) in UI
+   - Useful for production environments with restricted access
 
 ---
 
@@ -144,48 +143,48 @@ The application uses a **single Zustand store** with **Immer middleware** for im
 **Store Slices** (`src/stores/slices/`):
 
 1. **schedulerDataSlice** - Core scheduler data
-    - Queue tree structure (`SchedulerInfo`)
-    - Configuration properties (key-value map)
-    - Node labels and partitions
-    - Read-only mode flag
-    - Loading and error states
+   - Queue tree structure (`SchedulerInfo`)
+   - Configuration properties (key-value map)
+   - Node labels and partitions
+   - Read-only mode flag
+   - Loading and error states
 
 2. **queueDataSlice** - Queue hierarchy utilities
-    - Find queue by path
-    - Get parent/siblings/children
-    - Path manipulation utilities
-    - Queue tree traversal functions
+   - Find queue by path
+   - Get parent/siblings/children
+   - Path manipulation utilities
+   - Queue tree traversal functions
 
 3. **queueSelectionSlice** - UI selection state
-    - Currently selected queue(s)
-    - Multi-select support
-    - Selection history
+   - Currently selected queue(s)
+   - Multi-select support
+   - Selection history
 
 4. **stagedChangesSlice** - Pending changes management
-    - Stage queue property changes
-    - Stage queue add/remove operations
-    - Revert individual or all changes
-    - Apply changes to YARN (converts to mutations)
+   - Stage queue property changes
+   - Stage queue add/remove operations
+   - Revert individual or all changes
+   - Apply changes to YARN (converts to mutations)
 
 5. **placementRulesSlice** - Placement rule authoring
-    - Rule CRUD operations
-    - Rule ordering and validation
-    - Migration from legacy format
+   - Rule CRUD operations
+   - Rule ordering and validation
+   - Migration from legacy format
 
 6. **nodeLabelsSlice** - Node label operations
-    - Create/delete labels
-    - Assign nodes to labels
-    - Node-to-label mappings
+   - Create/delete labels
+   - Assign nodes to labels
+   - Node-to-label mappings
 
 7. **capacityEditorSlice** - Capacity editing
-    - Bulk capacity operations
-    - Capacity mode switching
-    - Validation helpers
+   - Bulk capacity operations
+   - Capacity mode switching
+   - Validation helpers
 
 8. **searchSlice** - Queue search
-    - Search query state
-    - Match highlighting
-    - Search results
+   - Search query state
+   - Match highlighting
+   - Search results
 
 **Pattern**: All slices use Immer middleware, allowing direct mutation syntax:
 
@@ -228,7 +227,7 @@ HTTP client for YARN ResourceManager REST APIs with the following features:
 - `GET /ws/v1/cluster/scheduler`
 - `GET /ws/v1/cluster/scheduler-conf`
 - `PUT /ws/v1/cluster/scheduler-conf`
-- `POST /ws/v1/cluster/scheduler-conf/validate`
+- `POST /ws/v1/cluster/scheduler-conf/validate/v2`
 - `GET /ws/v1/cluster/scheduler-conf/version`
 - `GET /ws/v1/cluster/get-node-labels`
 - `POST /ws/v1/cluster/add-node-labels`
@@ -284,7 +283,7 @@ Examples:
 
 **Schemas** (`src/config/schemas/`): Zod schemas for common formats (capacities, ACLs, percentages)
 
-**Validation Rules** (`src/config/validation-rules.ts`): Business validation rules with cross-queue logic
+**Validation Rules** (`src/config/validation-rules.ts`): Queue-scoped cross-field feedback
 
 ---
 
@@ -299,7 +298,7 @@ Examples:
         ↓
 2. stageQueueChange() creates StagedChange object
         ↓
-3. Validation runs (property + cross-queue)
+3. Local syntax and queue-scoped validation runs
         ↓
 4. User reviews in "Staged Changes" panel
         ↓
@@ -307,7 +306,7 @@ Examples:
         ↓
 6. applyStagedChanges() converts to YARN mutations
         ↓
-7. POST /scheduler-conf/validate (optional)
+7. POST /scheduler-conf/validate/v2
         ↓
 8. PUT /scheduler-conf with SchedConfUpdateInfo
 ```
@@ -362,57 +361,31 @@ Translates staged changes into YARN's `SchedConfUpdateInfo` format:
 
 #### Validation System
 
-**Multi-Layered Architecture** (`src/features/validation/`):
-
-```
-┌────────────────────────────────────────────────────┐
-│         Layer 1: Schema Validation                 │
-│  (Property descriptors - format, range, regex)     │
-└──────────────────┬─────────────────────────────────┘
-                   ▼
-┌────────────────────────────────────────────────────┐
-│      Layer 2: Business Validation Rules            │
-│  (validation-rules.ts - cross-field logic)         │
-└──────────────────┬─────────────────────────────────┘
-                   ▼
-┌────────────────────────────────────────────────────┐
-│     Layer 3: Cross-Queue Validation                │
-│  (crossQueue.ts - dependency-aware validation)     │
-│  - Detects affected queues                         │
-│  - Validates parent/children/siblings              │
-│  - Ensures capacity sums, mode consistency         │
-└────────────────────────────────────────────────────┘
-```
+Validation has a client layer and an authoritative server layer.
+Queue property descriptors and `validation-rules.ts` provide immediate syntax and queue-scoped cross-field feedback.
+The ResourceManager validation engine owns sibling, parent-child, queue-tree, global, and runtime-dependent semantics.
+Before applying a mutation, the UI posts the complete proposal to `POST /scheduler-conf/validate/v2`.
 
 **Key Components**:
 
-1. **service.ts** - Main validation orchestration
-    - `validateField()` - Single property validation with context
-    - `validateQueue()` - All properties in a queue
-    - `hasBlockingIssues()` - Check for blocking errors
+1. **service.ts** - Local validation orchestration
+   - `validateField()` - Single property validation with context
+   - `validateQueue()` - Edited properties for one queue
+   - `validateStagedChanges()` - Refreshes local issues on staged capacity changes
+   - `hasBlockingIssues()` - Checks for blocking errors
 
-2. **crossQueue.ts** - Cross-queue validation engine
-    - `validatePropertyChange()` - Validates a property change with cross-queue awareness
-    - `validateStagedChanges()` - Validates all staged changes (or a filtered subset)
-    - Handles parent/children/siblings relationships
+2. **YarnApiClient.ts** - Structured server validation client
+   - Accepts valid `200` and structured invalid `400` responses
+   - Returns the configuration version validated by the server
 
-3. **ruleCategories.ts** - Rule categorization
-    - `CROSS_QUEUE_RULES` - Affects multiple queues (re-validate dependencies)
-    - `QUEUE_SPECIFIC_RULES` - Only validates single queue
-    - `WARNING_ONLY_RULES` - Never blocks applying changes
+3. **stagedChangesSlice.ts** - Apply-time gate
+   - Aborts before mutation when the server reports errors
+   - Threads the validated `configVersion` into the subsequent mutation
 
-4. **utils/affectedQueues.ts** - Dependency detection
-    - Determines which queues need re-validation when a property changes
-    - Example: changing parent capacity affects all children
+**Local Validation Rules** (from `validation-rules.ts`):
 
-**Validation Rules Examples** (from `validation-rules.ts`):
-
-- `CAPACITY_SUM` - Sibling capacities must sum correctly
-- `MAX_CAPACITY_CONSTRAINT` - Maximum capacity >= capacity
-- `CONSISTENT_CAPACITY_MODE` - Siblings use same mode (legacy mode)
-- `PARENT_CHILD_CAPACITY_CONSTRAINT` - Child resources ≤ parent
-- `PARENT_CHILD_CAPACITY_MODE` - Absolute mode inheritance (legacy)
-- `WEIGHT_MODE_TRANSITION_FLEXIBLE_AQC` - Auto-queue compatibility
+- `MAX_CAPACITY_CONSTRAINT` - Maximum capacity is compatible with and no smaller than capacity
+- `WEIGHT_MODE_TRANSITION_FLEXIBLE_AQC` - Flexible auto-queue compatibility during a local mode transition
 
 **Validation Context**:
 
@@ -436,10 +409,10 @@ Translates staged changes into YARN's `SchedConfUpdateInfo` format:
 
 - **SchedulerInfo** - Root scheduler with queue tree
 - **QueueInfo** - Individual queue:
-    - Properties (capacity, state, ACLs, limits)
-    - Children (recursive hierarchy)
-    - Live metrics (used capacity, running apps, pending apps)
-    - Per-partition capacities
+  - Properties (capacity, state, ACLs, limits)
+  - Children (recursive hierarchy)
+  - Live metrics (used capacity, running apps, pending apps)
+  - Per-partition capacities
 
 **Queue Path Format**: Dot-separated hierarchical identifiers
 
@@ -478,18 +451,18 @@ Translates staged changes into YARN's `SchedConfUpdateInfo` format:
 MSW enables three modes controlled by `VITE_API_MOCK_MODE`:
 
 1. **`static`** (default in dev)
-    - Serves JSON fixtures from `public/mock/ws/v1/cluster/*.json`
-    - No YARN cluster required
-    - Consistent data for development and testing
+   - Serves JSON fixtures from `public/mock/ws/v1/cluster/*.json`
+   - No YARN cluster required
+   - Consistent data for development and testing
 
 2. **`cluster`**
-    - Proxies requests to real YARN cluster via `VITE_CLUSTER_PROXY_TARGET`
-    - Example: `http://rm-host:8088`
-    - Live data from actual cluster
+   - Proxies requests to real YARN cluster via `VITE_CLUSTER_PROXY_TARGET`
+   - Example: `http://rm-host:8088`
+   - Live data from actual cluster
 
 3. **`off`**
-    - Disables mocking entirely
-    - Production builds use this mode
+   - Disables mocking entirely
+   - Production builds use this mode
 
 MSW boots automatically in dev mode via `src/app/entry.client.tsx`.
 
@@ -513,9 +486,9 @@ MSW boots automatically in dev mode via `src/app/entry.client.tsx`.
 
 - **Tailwind CSS 4.1.4** - Utility-first CSS framework
 - **Radix UI** - Headless accessible component primitives:
-    - Accordion, Checkbox, Dialog, Dropdown Menu, Label, Popover, Progress
-    - Scroll Area, Select, Separator, Switch, Tabs, Toggle, Tooltip
-    - Context Menu, Collapsible
+  - Accordion, Checkbox, Dialog, Dropdown Menu, Label, Popover, Progress
+  - Scroll Area, Select, Separator, Switch, Tabs, Toggle, Tooltip
+  - Context Menu, Collapsible
 - **shadcn/ui** - Pre-built components using Radix + Tailwind
 - **Lucide React 0.525.0** - Icon library
 - **class-variance-authority 0.7.1** - Component variant styling
@@ -569,10 +542,10 @@ MSW boots automatically in dev mode via `src/app/entry.client.tsx`.
 ### Code Quality
 
 - **ESLint 9.18.0** - Linting with TypeScript and React rules
-    - **typescript-eslint 8.20.0**
-    - **@eslint-react/eslint-plugin 2.2.4**
-    - **eslint-plugin-react-compiler 19.1.0-rc.2**
-    - **eslint-plugin-react-hooks 5.1.0**
+  - **typescript-eslint 8.20.0**
+  - **@eslint-react/eslint-plugin 2.2.4**
+  - **eslint-plugin-react-compiler 19.1.0-rc.2**
+  - **eslint-plugin-react-hooks 5.1.0**
 - **Prettier 3.5.0** - Code formatting
 - **Husky 9.1.7** - Git hooks
 - **lint-staged 16.1.2** - Run linters on staged files
@@ -727,55 +700,14 @@ function evaluateMyNewRule(context: ValidationContext): ValidationIssue[] {
 }
 ```
 
-3. **Categorize rule** in `src/features/validation/ruleCategories.ts`:
+3. **Confirm ownership.** Keep only queue-scoped cross-field feedback in the UI.
+   Add structural, scheduler-wide, or runtime-dependent rules to the ResourceManager validation engine.
 
-```typescript
-// If rule affects multiple queues (parent, children, or siblings)
-export const CROSS_QUEUE_RULES = [
-  // ... existing
-  'my-new-rule',
-];
-
-// If rule only validates the single queue being edited
-export const QUEUE_SPECIFIC_RULES = [
-  // ... existing
-  'my-new-rule',
-];
-
-// If rule should never block applying changes (informational only)
-export const WARNING_ONLY_RULES = [
-  // ... existing
-  'my-new-rule',
-];
-```
-
-4. **Implement affected queues logic** if cross-queue (in `src/features/validation/utils/affectedQueues.ts`):
-
-```typescript
-export function getAffectedQueuesForRule(
-  rule: string,
-  changedQueuePath: string,
-  schedulerData?: SchedulerInfo,
-): string[] {
-  switch (rule) {
-    case 'my-new-rule':
-      // Return list of queue paths that need re-validation
-      // Example: parent and all siblings
-      const parent = getParentQueuePath(changedQueuePath);
-      const siblings = getSiblingQueues(changedQueuePath, schedulerData);
-      return [parent, ...siblings.map((q) => q.queuePath)];
-
-    // ... other rules
-  }
-}
-```
-
-5. **Write tests** in `src/config/__tests__/validation-rules.test.ts`
+4. **Write tests** in `src/config/__tests__/validation-rules.test.ts`.
 
 **Key Validation Patterns**:
 
-- **Sibling validation**: Iterate over siblings and sum/compare values
-- **Parent-child validation**: Get parent value and compare with children
+- **Queue-scoped relationships**: Compare effective properties on the edited queue
 - **Mode-dependent validation**: Check `context.legacyModeEnabled`
 - **Template queues**: Use `isTemplateQueuePath()` to skip if not applicable
 - **Conditional rules**: Check if related properties are set before validating
@@ -826,10 +758,9 @@ Property automatically appears in the Global Settings page (`src/app/routes/glob
 **Validation System**:
 
 - `src/features/validation/service.ts` - Main validation entry point
-- `src/features/validation/crossQueue.ts` - Cross-queue validation engine
-- `src/features/validation/ruleCategories.ts` - Rule categorization
-- `src/features/validation/utils/affectedQueues.ts` - Dependency detection
 - `src/features/validation/utils/dedupeIssues.ts` - Issue deduplication
+- `src/lib/api/YarnApiClient.ts` - Structured ResourceManager validation client
+- `src/stores/slices/stagedChangesSlice.ts` - Apply-time validation and version handoff
 
 **State Management**:
 
@@ -948,7 +879,7 @@ The YARN Scheduler UI is a modern web application that provides a visual interfa
 
 - **Client-side SPA** with React 19 and TypeScript (strict mode)
 - **Staged changes pattern** ensures all edits are reviewed and validated before applying
-- **Comprehensive validation** with cross-queue dependency detection
+- **Authoritative validation** through the ResourceManager structured validation endpoint
 - **Extensible configuration system** with property descriptors and validation rules
 - **Development-friendly** with MSW for local development without a YARN cluster
 - **Well-tested** with Vitest, Testing Library, and MSW integration

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { http, HttpResponse } from 'msw';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -65,7 +64,11 @@ export const serverHandlers = [
     console.log('Mock: Applying configuration changes:', changes);
 
     return HttpResponse.json({
-      response: 'Configuration updated successfully',
+      validationResult: {
+        valid: true,
+        configVersion: 1234567891,
+        issues: { issue: [] },
+      },
     });
   }),
 

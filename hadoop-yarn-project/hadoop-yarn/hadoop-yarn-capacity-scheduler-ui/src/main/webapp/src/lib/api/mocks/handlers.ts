@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { http, HttpResponse, type HttpHandler } from 'msw';
 import { API_CONFIG } from '~/lib/api/config';
 import { HTTP_AUTH_PROPERTY, READ_ONLY_PROPERTY } from '~/config';
@@ -48,20 +47,27 @@ const staticHandlers: HttpHandler[] = [
     console.log('Mock: Applying configuration changes:', changes);
 
     return HttpResponse.json({
-      response: 'Configuration updated successfully',
+      validationResult: {
+        valid: true,
+        configVersion: 16,
+        issues: { issue: [] },
+      },
     });
   }),
 
-  http.post(`${baseUrl}/scheduler-conf/validate`, async ({ request }) => {
+  http.post(`${baseUrl}/scheduler-conf/validate/v2`, async ({ request }) => {
     // Simulate processing time
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const changes = await request.json();
     console.log('Mock: Validating configuration changes:', changes);
 
-    // Always return success for mock mode
     return HttpResponse.json({
-      validation: 'success',
+      validationResult: {
+        valid: true,
+        configVersion: 15,
+        issues: { issue: [] },
+      },
     });
   }),
 
