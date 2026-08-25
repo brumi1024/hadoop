@@ -17,7 +17,7 @@
  */
 
 
-import type { QueueInfo } from './queue';
+import type { QueueInfo, QueueCapacityVectorInfo } from './queue';
 import type { ResourceInfo } from './resource';
 
 export type SchedulerData = {
@@ -58,6 +58,8 @@ export type QueueCapacitiesByPartition = {
   reservedResource?: ResourceInfo;
   totalResource?: ResourceInfo;
   usedResource?: ResourceInfo;
+  queueCapacityVectorInfo?: QueueCapacityVectorInfo;
+  maximumQueueCapacityVectorInfo?: QueueCapacityVectorInfo;
 };
 
 export type HealthInfo = {
