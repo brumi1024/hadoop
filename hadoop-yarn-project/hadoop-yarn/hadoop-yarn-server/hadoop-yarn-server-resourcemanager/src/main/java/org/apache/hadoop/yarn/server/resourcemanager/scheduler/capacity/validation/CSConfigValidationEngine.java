@@ -79,6 +79,20 @@ public final class CSConfigValidationEngine {
    */
   public CompileResult compile(CSConfigModel proposed, ClusterFacts facts) {
     ValidatedQueuePlan plan = ValidatedQueuePlan.fromModel(proposed);
+    return new CompileResult(plan,
+        validatePlan(proposed, facts, plan).getIssues());
+  }
+
+  /**
+   * Evaluates validation rules against an already compiled plan.
+   *
+   * @param proposed proposed immutable scheduler configuration model
+   * @param facts immutable runtime facts captured for this validation
+   * @param plan immutable plan compiled from the proposed model
+   * @return structured validation result
+   */
+  public ValidationResult validatePlan(CSConfigModel proposed,
+      ClusterFacts facts, ValidatedQueuePlan plan) {
     ValidationContext context = new ValidationContext(proposed, facts, plan);
     List<ValidationIssue> issues = new ArrayList<>();
     for (ConfigDiagnostic diagnostic : proposed.getDiagnostics()) {
@@ -92,7 +106,7 @@ public final class CSConfigValidationEngine {
         issue.getSeverity() == ValidationIssue.Severity.ERROR)) {
       runStage(ValidationRule.Stage.HIERARCHY, context, issues);
     }
-    return new CompileResult(plan, issues);
+    return new ValidationResult(issues);
   }
 
   private void addDiagnostic(ConfigDiagnostic diagnostic,
