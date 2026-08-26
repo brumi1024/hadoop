@@ -17,46 +17,34 @@
  */
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation;
 
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
+import java.util.List;
+
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 
-/** Validation context shared by validation rules, including attached results. */
-public final class ValidationContext {
-  private final CSConfigModel model;
-  private final ClusterFacts facts;
+/** Immutable compiled queue plan and its structured validation issues. */
+public final class CompileResult {
   private final ValidatedQueuePlan plan;
-  private CSQueue proposedRoot;
-  private ValidationQueueBuildContext buildContext;
+  private final List<ValidationIssue> issues;
 
-  ValidationContext(CSConfigModel model, ClusterFacts facts,
-      ValidatedQueuePlan plan) {
-    this.model = model;
-    this.facts = facts;
+  CompileResult(ValidatedQueuePlan plan, List<ValidationIssue> issues) {
     this.plan = plan;
-  }
-
-  public CSConfigModel getModel() {
-    return model;
-  }
-  public ClusterFacts getFacts() {
-    return facts;
+    this.issues = List.copyOf(issues);
   }
 
   public ValidatedQueuePlan getPlan() {
     return plan;
   }
 
-  public CSQueue getProposedRoot() {
-    return proposedRoot;
+  public List<ValidationIssue> getIssues() {
+    return issues;
   }
 
-  public ValidationQueueBuildContext getBuildContext() {
-    return buildContext;
+  public boolean isValid() {
+    return issues.stream().noneMatch(issue ->
+        issue.getSeverity() == ValidationIssue.Severity.ERROR);
   }
 
-  void attachBuiltTree(CSQueue root, ValidationQueueBuildContext context) {
-    proposedRoot = root;
-    buildContext = context;
+  ValidationResult asValidationResult() {
+    return new ValidationResult(issues);
   }
 }

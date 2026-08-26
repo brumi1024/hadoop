@@ -77,6 +77,7 @@ public final class QueueConfigNode {
   private final String defaultNodeLabelExpression;
   private final boolean autoCreateChildQueueEnabled;
   private final boolean autoQueueCreationV2Enabled;
+  private final boolean reservable;
   private final Map<String, String> aclProperties;
 
   @SuppressWarnings("checkstyle:ParameterNumber")
@@ -91,7 +92,7 @@ public final class QueueConfigNode {
       float maximumApplicationMasterShare, float userLimit,
       float userLimitFactor, String defaultNodeLabelExpression,
       boolean autoCreateChildQueueEnabled,
-      boolean autoQueueCreationV2Enabled) {
+      boolean autoQueueCreationV2Enabled, boolean reservable) {
     this.queuePath = queuePath;
     this.parent = parent;
     this.mutableChildren = new LinkedHashMap<>();
@@ -115,6 +116,7 @@ public final class QueueConfigNode {
     this.defaultNodeLabelExpression = defaultNodeLabelExpression;
     this.autoCreateChildQueueEnabled = autoCreateChildQueueEnabled;
     this.autoQueueCreationV2Enabled = autoQueueCreationV2Enabled;
+    this.reservable = reservable;
     this.aclProperties = propertiesWithPrefix(rawProperties, "acl_");
   }
 
@@ -204,6 +206,10 @@ public final class QueueConfigNode {
 
   public boolean isAutoQueueCreationV2Enabled() {
     return autoQueueCreationV2Enabled;
+  }
+
+  public boolean isReservable() {
+    return reservable;
   }
 
   public Map<String, String> getAclProperties() {

@@ -213,6 +213,8 @@ public final class CSConfigModelBuilder {
             false, path, diagnostics),
         parseBoolean(raw,
             CapacitySchedulerConfiguration.AUTO_QUEUE_CREATION_V2_ENABLED,
+            false, path, diagnostics),
+        parseBoolean(raw, CapacitySchedulerConfiguration.IS_RESERVABLE,
             false, path, diagnostics));
   }
 
@@ -259,6 +261,8 @@ public final class CSConfigModelBuilder {
             false, path, diagnostics),
         parseBoolean(raw,
             CapacitySchedulerConfiguration.AUTO_QUEUE_CREATION_V2_ENABLED,
+            false, path, diagnostics),
+        parseBoolean(raw, CapacitySchedulerConfiguration.IS_RESERVABLE,
             false, path, diagnostics));
     nodes.put(path, node);
     for (String childName : childNames) {

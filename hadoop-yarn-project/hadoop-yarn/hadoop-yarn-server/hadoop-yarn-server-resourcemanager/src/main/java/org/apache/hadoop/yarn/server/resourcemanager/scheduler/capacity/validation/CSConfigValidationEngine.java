@@ -25,6 +25,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.mod
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.ConfigDiagnostic;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.AbsoluteParentMinCoverageRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.CapacityModeUniformityRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.CapacityVectorUpdateRule;
@@ -66,7 +67,20 @@ public final class CSConfigValidationEngine {
 
   public ValidationResult validate(CSConfigModel proposed,
       ClusterFacts facts) {
-    ValidationContext context = new ValidationContext(proposed, facts);
+    return compile(proposed, facts).asValidationResult();
+  }
+
+  /**
+   * Compiles an immutable queue plan and evaluates all structured validation
+   * rules against the same model and runtime-facts snapshot.
+   *
+   * @param proposed proposed immutable scheduler configuration model
+   * @param facts immutable runtime facts captured for this validation
+   * @return compiled plan and validation issues
+   */
+  public CompileResult compile(CSConfigModel proposed, ClusterFacts facts) {
+    ValidatedQueuePlan plan = ValidatedQueuePlan.fromModel(proposed);
+    ValidationContext context = new ValidationContext(proposed, facts, plan);
     List<ValidationIssue> issues = new ArrayList<>();
     for (ConfigDiagnostic diagnostic : proposed.getDiagnostics()) {
       ValidationIssue.Severity severity = DIAGNOSTIC_SEVERITIES.getOrDefault(
@@ -84,7 +98,7 @@ public final class CSConfigValidationEngine {
         issue.getSeverity() == ValidationIssue.Severity.ERROR)) {
       runStage(ValidationRule.Stage.HIERARCHY, context, issues);
     }
-    return new ValidationResult(issues);
+    return new CompileResult(plan, issues);
   }
 
   private void buildHierarchy(ValidationContext context,
