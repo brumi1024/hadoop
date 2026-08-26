@@ -21,6 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.ConfigDiagnostic;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
@@ -66,12 +68,35 @@ public final class CSConfigValidationEngine {
 
   public ValidationResult validate(CSConfigModel proposed,
       ClusterFacts facts) {
-    return compile(proposed, facts).asValidationResult();
+    ValidatedQueuePlan plan = ValidatedQueuePlan.fromModel(proposed);
+    ValidationContext context = new ValidationContext(proposed, facts, plan);
+    List<ValidationIssue> issues = new ArrayList<>();
+    for (ConfigDiagnostic diagnostic : proposed.getDiagnostics()) {
+      addDiagnostic(diagnostic, issues);
+    }
+    for (ConfigDiagnostic diagnostic : plan.getCompilationDiagnostics()) {
+      addDiagnostic(diagnostic, issues);
+    }
+    runStage(ValidationRule.Stage.MODEL, context, issues);
+    if (hasNoErrors(issues)) {
+      buildHierarchy(context, issues);
+    }
+    if (hasNoErrors(issues)) {
+      runStage(ValidationRule.Stage.HIERARCHY, context, issues);
+    }
+    return new ValidationResult(issues);
   }
 
   /**
    * Compiles an immutable queue plan and evaluates all structured validation
    * rules against the same model and runtime-facts snapshot.
+   *
+   * <p>This operation deliberately does not instantiate configured policy
+   * plugins. A valid result therefore covers configuration-only checks, but
+   * is not sufficient for production activation when custom policy hooks can
+   * reject the candidate. The production {@link #validate(CSConfigModel,
+   * ClusterFacts)} path retains isolated hierarchy construction until that
+   * compatibility boundary has a side-effect-free representation.</p>
    *
    * @param proposed proposed immutable scheduler configuration model
    * @param facts immutable runtime facts captured for this validation
@@ -122,5 +147,28 @@ public final class CSConfigValidationEngine {
       List<ValidationIssue> issues) {
     rules.stream().filter(rule -> rule.stage() == stage)
         .forEach(rule -> rule.run(context, issues::add));
+  }
+
+  private void buildHierarchy(ValidationContext context,
+      List<ValidationIssue> issues) {
+    try {
+      ValidationQueueBuildContext buildContext =
+          new ValidationQueueBuildContext(context.getModel(),
+              context.getFacts());
+      CSQueue proposedRoot = CapacitySchedulerQueueManager
+          .buildQueueTreeForValidation(buildContext,
+              buildContext.getConfiguration());
+      context.attachBuiltTree(proposedRoot, buildContext);
+    } catch (Throwable failure) {
+      issues.add(new ValidationIssue(null, null, "queue-tree-build",
+          ValidationIssue.Severity.ERROR,
+          failure.getMessage() == null ? failure.getClass().getSimpleName()
+              : failure.getMessage()));
+    }
+  }
+
+  private boolean hasNoErrors(List<ValidationIssue> issues) {
+    return issues.stream().noneMatch(issue ->
+        issue.getSeverity() == ValidationIssue.Severity.ERROR);
   }
 }

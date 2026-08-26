@@ -469,13 +469,12 @@ public class CapacityScheduler extends
       throws IOException {
     CSConfigModel model = proposed.getModel();
     ClusterFacts facts = ClusterFacts.capture(this);
-    CompileResult compiled = new CSConfigValidationEngine().compile(
+    ValidationResult validation = new CSConfigValidationEngine().validate(
         model, facts);
-    ValidationResult validation = compiled.asValidationResult();
     if (!validation.isValid()) {
       throw validationFailure(validation);
     }
-    activateConfiguration(proposed, rmContext, compiled.getPlan());
+    activateConfiguration(proposed, rmContext, null);
   }
 
   /**
@@ -483,27 +482,52 @@ public class CapacityScheduler extends
    * while holding its serialization lock.
    * @param proposed proposed scheduler configuration
    * @param rmContext ResourceManager context
-   * @param compiled compiled plan and validation result accepted by the caller
+   * @param validatedModel model already validated by the caller
+   * @param validatedFacts facts used for caller validation
    * @throws IOException when queue replacement fails
    */
   @Private
   public void reinitializePreValidated(
       CapacitySchedulerConfiguration proposed, RMContext rmContext,
-      CompileResult compiled)
+      CSConfigModel validatedModel, ClusterFacts validatedFacts)
       throws IOException {
+    Preconditions.checkNotNull(proposed);
+    Preconditions.checkNotNull(rmContext);
+    Preconditions.checkNotNull(validatedModel);
+    Preconditions.checkNotNull(validatedFacts);
+    Preconditions.checkState(getMutableConfProvider() != null
+        && getMutableConfProvider().isMutationLockHeld(),
+        "Mutation lock must be held for pre-validated reinitialization");
+    activateConfiguration(proposed, rmContext, null);
+  }
+
+  /**
+   * Exercises compiled-plan activation for the prototype benchmark only.
+   * The mutation pipeline deliberately retains legacy hierarchy validation
+   * until custom policy hooks can be represented without executing plugins.
+   * @param proposed proposed scheduler configuration
+   * @param rmContext ResourceManager context
+   * @param compiled compiled plan and validation result
+   * @throws IOException when queue replacement fails
+   */
+  @VisibleForTesting
+  void reinitializeCompiledPrototype(
+      CapacitySchedulerConfiguration proposed, RMContext rmContext,
+      CompileResult compiled) throws IOException {
     Preconditions.checkNotNull(proposed);
     Preconditions.checkNotNull(rmContext);
     Preconditions.checkNotNull(compiled);
     Preconditions.checkState(getMutableConfProvider() != null
         && getMutableConfProvider().isMutationLockHeld(),
-        "Mutation lock must be held for pre-validated reinitialization");
+        "Mutation lock must be held for prototype reinitialization");
     Preconditions.checkArgument(compiled.isValid(),
         "Compiled queue plan must be valid");
     activateConfiguration(proposed, rmContext, compiled.getPlan());
   }
 
   private void activateConfiguration(CapacitySchedulerConfiguration proposed,
-      RMContext rmContext, ValidatedQueuePlan plan) throws IOException {
+      RMContext rmContext, ValidatedQueuePlan prototypePlan)
+      throws IOException {
     writeLock.lock();
     try {
       CapacitySchedulerConfiguration oldConf = this.conf;
@@ -513,7 +537,11 @@ public class CapacityScheduler extends
         LOG.info("Re-initializing queues...");
         refreshMaximumAllocation(
             ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
-        reinitializeQueues(this.conf, plan);
+        if (prototypePlan == null) {
+          reinitializeQueues(this.conf);
+        } else {
+          reinitializeQueues(this.conf, prototypePlan);
+        }
       } catch (Throwable t) {
         this.conf = oldConf;
         reinitializeQueues(this.conf);

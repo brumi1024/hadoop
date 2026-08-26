@@ -225,7 +225,7 @@ public class CSConfigBaselineBenchmark {
                 !activateMutated.get());
             return provider.runUnderMutationLock(() -> {
               long t0 = System.nanoTime();
-              cs.reinitializePreValidated(
+              cs.reinitializeCompiledPrototype(
                   useMutated ? mutatedCapacity : originalCapacity,
                   rmContext,
                   useMutated ? mutatedCompiled : originalCompiled);
@@ -234,7 +234,7 @@ public class CSConfigBaselineBenchmark {
           });
 
       provider.runUnderMutationLock(() -> {
-        cs.reinitializePreValidated(originalCapacity, rmContext,
+        cs.reinitializeCompiledPrototype(originalCapacity, rmContext,
             originalCompiled);
         return null;
       });

@@ -39,6 +39,12 @@ public final class CompileResult {
     return issues;
   }
 
+  /**
+   * Reports whether configuration-only compilation and plan rules succeeded.
+   * Custom plugin lifecycle hooks are intentionally outside this result.
+   *
+   * @return true when the compiled plan has no error issue
+   */
   public boolean isValid() {
     return issues.stream().noneMatch(issue ->
         issue.getSeverity() == ValidationIssue.Severity.ERROR);

@@ -31,6 +31,8 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.policy.FifoOrderingPolicy;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.policy.SchedulableEntity;
 import org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator;
 import org.junit.jupiter.api.Test;
 
@@ -44,6 +46,14 @@ public class TestCSConfigValidationEngine {
   private static final QueuePath A = new QueuePath("root.a");
   private final CSConfigValidationEngine engine =
       new CSConfigValidationEngine();
+
+  public static final class RejectingOrderingPolicy
+      extends FifoOrderingPolicy<SchedulableEntity> {
+    @Override
+    public void configure(Map<String, String> parameters) {
+      throw new IllegalArgumentException("custom-policy-rejected");
+    }
+  }
 
   @Test
   public void testValidPercentageTree() {
@@ -254,10 +264,30 @@ public class TestCSConfigValidationEngine {
     conf.setCapacity(A, 100);
     conf.setAutoCreateChildQueueEnabled(ROOT, true);
 
-    ValidationResult result = engine.validate(conf.getModel(),
+    CompileResult result = engine.compile(conf.getModel(),
         ClusterFacts.empty());
 
     assertTrue(result.isValid(), result.getIssues().toString());
+  }
+
+  @Test
+  public void testCustomPolicyHooksRequireLegacyHierarchyValidation() {
+    CapacitySchedulerConfiguration conf = conf();
+    conf.setQueues(ROOT, new String[] {"a"});
+    conf.setCapacity(A, 100);
+    conf.setOrderingPolicy(A, RejectingOrderingPolicy.class.getName());
+
+    CompileResult compilation = engine.compile(conf.getModel(),
+        ClusterFacts.empty());
+    ValidationResult productionValidation = engine.validate(conf.getModel(),
+        ClusterFacts.empty());
+
+    assertTrue(compilation.isValid(), compilation.getIssues().toString());
+    assertFalse(productionValidation.isValid());
+    assertTrue(productionValidation.getIssues().stream().anyMatch(issue ->
+        "queue-tree-build".equals(issue.getRuleId())
+            && issue.getMessage().contains("custom-policy-rejected")),
+        productionValidation.getIssues().toString());
   }
 
   @Test

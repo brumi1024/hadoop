@@ -33,7 +33,6 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CompileResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
@@ -139,9 +138,8 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
       applyMutation(proposed, changes);
       CSConfigModel model = proposed.getModel();
       ClusterFacts facts = ClusterFacts.capture(scheduler);
-      CompileResult compiled = new CSConfigValidationEngine().compile(
+      ValidationResult result = new CSConfigValidationEngine().validate(
           model, facts);
-      ValidationResult result = compiled.asValidationResult();
       if (!result.isValid()) {
         return result;
       }
@@ -149,7 +147,8 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
       LogMutation log = new LogMutation(changes, user.getShortUserName());
       confStore.logMutation(log);
       try {
-        scheduler.reinitializePreValidated(proposed, rmContext, compiled);
+        scheduler.reinitializePreValidated(proposed, rmContext,
+            model, facts);
         confStore.confirmMutation(log, true);
         current = new ConfigSnapshot(proposed, confStore.getConfigVersion());
       } catch (Throwable failure) {
