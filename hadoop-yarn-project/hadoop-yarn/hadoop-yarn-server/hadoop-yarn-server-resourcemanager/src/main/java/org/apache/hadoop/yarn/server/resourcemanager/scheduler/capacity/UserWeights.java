@@ -17,7 +17,9 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 
@@ -68,6 +70,14 @@ public final class UserWeights {
       return DEFAULT_WEIGHT;
     }
     return weight;
+  }
+
+  /**
+   * Returns an immutable snapshot suitable for a compiled queue plan.
+   * @return configured user weights
+   */
+  public Map<String, Float> asMap() {
+    return Collections.unmodifiableMap(new LinkedHashMap<>(data));
   }
 
   public void validateForLeafQueue(float queueUserLimit, String queuePath) throws IOException {

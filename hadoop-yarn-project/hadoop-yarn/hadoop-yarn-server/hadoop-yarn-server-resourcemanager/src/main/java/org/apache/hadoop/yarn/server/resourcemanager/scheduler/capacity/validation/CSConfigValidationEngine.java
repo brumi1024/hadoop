@@ -82,11 +82,10 @@ public final class CSConfigValidationEngine {
     ValidationContext context = new ValidationContext(proposed, facts, plan);
     List<ValidationIssue> issues = new ArrayList<>();
     for (ConfigDiagnostic diagnostic : proposed.getDiagnostics()) {
-      ValidationIssue.Severity severity = DIAGNOSTIC_SEVERITIES.getOrDefault(
-          diagnostic.getCode(), ValidationIssue.Severity.ERROR);
-      issues.add(new ValidationIssue(diagnostic.getQueuePath(),
-          diagnostic.getPropertyKey(), diagnostic.getCode(), severity,
-          diagnostic.getMessage()));
+      addDiagnostic(diagnostic, issues);
+    }
+    for (ConfigDiagnostic diagnostic : plan.getCompilationDiagnostics()) {
+      addDiagnostic(diagnostic, issues);
     }
     runStage(ValidationRule.Stage.MODEL, context, issues);
     if (issues.stream().noneMatch(issue ->
@@ -94,6 +93,15 @@ public final class CSConfigValidationEngine {
       runStage(ValidationRule.Stage.HIERARCHY, context, issues);
     }
     return new CompileResult(plan, issues);
+  }
+
+  private void addDiagnostic(ConfigDiagnostic diagnostic,
+      List<ValidationIssue> issues) {
+    ValidationIssue.Severity severity = DIAGNOSTIC_SEVERITIES.getOrDefault(
+        diagnostic.getCode(), ValidationIssue.Severity.ERROR);
+    issues.add(new ValidationIssue(diagnostic.getQueuePath(),
+        diagnostic.getPropertyKey(), diagnostic.getCode(), severity,
+        diagnostic.getMessage()));
   }
 
   private void runStage(ValidationRule.Stage stage, ValidationContext context,

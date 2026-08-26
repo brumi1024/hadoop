@@ -30,6 +30,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsMana
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.ConfigDiagnostic;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 
 /**
@@ -100,6 +101,7 @@ public final class ValidatedQueuePlan {
     private final boolean autoQueueCreationV2Enabled;
     private final boolean reservable;
     private final Map<String, String> aclProperties;
+    private final CompiledQueueSettings settings;
 
     @SuppressWarnings("checkstyle:ParameterNumber")
     private QueuePlanNode(QueueConfigNode source, QueuePlanNode parent,
@@ -108,7 +110,8 @@ public final class ValidatedQueuePlan {
         Map<String, CapacitySetting> maximumCapacities,
         Set<String> declaredAccessibleNodeLabels,
         Set<String> accessibleNodeLabels, Set<String> configuredNodeLabels,
-        QueueState initialState, String defaultNodeLabelExpression) {
+        QueueState initialState, String defaultNodeLabelExpression,
+        CompiledQueueSettings settings) {
       this.queuePath = source.getQueuePath();
       this.parentPath = parent == null ? null : parent.getQueuePath();
       this.childPaths = List.copyOf(childPaths);
@@ -140,6 +143,7 @@ public final class ValidatedQueuePlan {
       this.reservable = source.isReservable();
       this.aclProperties = Collections.unmodifiableMap(
           new LinkedHashMap<>(source.getAclProperties()));
+      this.settings = settings;
     }
 
     public QueuePath getQueuePath() {
@@ -241,20 +245,29 @@ public final class ValidatedQueuePlan {
     public Map<String, String> getAclProperties() {
       return aclProperties;
     }
+
+    public CompiledQueueSettings getSettings() {
+      return settings;
+    }
   }
 
   private final QueuePlanNode root;
   private final Map<QueuePath, QueuePlanNode> queues;
   private final boolean legacyQueueMode;
   private final String resourceTypes;
+  private final CompiledSchedulerSettings schedulerSettings;
+  private final List<ConfigDiagnostic> compilationDiagnostics;
 
   private ValidatedQueuePlan(QueuePlanNode root,
       Map<QueuePath, QueuePlanNode> queues, boolean legacyQueueMode,
-      String resourceTypes) {
+      String resourceTypes, CompiledSchedulerSettings schedulerSettings,
+      List<ConfigDiagnostic> compilationDiagnostics) {
     this.root = root;
     this.queues = Collections.unmodifiableMap(new LinkedHashMap<>(queues));
     this.legacyQueueMode = legacyQueueMode;
     this.resourceTypes = resourceTypes;
+    this.schedulerSettings = schedulerSettings;
+    this.compilationDiagnostics = List.copyOf(compilationDiagnostics);
   }
 
   /**
@@ -265,10 +278,14 @@ public final class ValidatedQueuePlan {
    * @return immutable queue plan
    */
   public static ValidatedQueuePlan fromModel(CSConfigModel model) {
+    QueuePlanSettingsCompiler settingsCompiler =
+        new QueuePlanSettingsCompiler(model);
     Map<QueuePath, QueuePlanNode> queues = new LinkedHashMap<>();
-    QueuePlanNode root = compileNode(model, model.getRoot(), null, queues);
+    QueuePlanNode root = compileNode(model, model.getRoot(), null, queues,
+        settingsCompiler);
     return new ValidatedQueuePlan(root, queues, model.isLegacyQueueMode(),
-        model.getResourceTypes());
+        model.getResourceTypes(), settingsCompiler.getSchedulerSettings(),
+        settingsCompiler.getDiagnostics());
   }
 
   public QueuePlanNode getRoot() {
@@ -291,9 +308,18 @@ public final class ValidatedQueuePlan {
     return resourceTypes;
   }
 
+  public CompiledSchedulerSettings getSchedulerSettings() {
+    return schedulerSettings;
+  }
+
+  public List<ConfigDiagnostic> getCompilationDiagnostics() {
+    return compilationDiagnostics;
+  }
+
   private static QueuePlanNode compileNode(CSConfigModel model,
       QueueConfigNode source, QueuePlanNode parent,
-      Map<QueuePath, QueuePlanNode> queues) {
+      Map<QueuePath, QueuePlanNode> queues,
+      QueuePlanSettingsCompiler settingsCompiler) {
     List<QueuePath> childPaths = new ArrayList<>();
     source.getChildren().values().forEach(child ->
         childPaths.add(child.getQueuePath()));
@@ -334,12 +360,16 @@ public final class ValidatedQueuePlan {
     }
 
     QueueState initialState = initialState(source.getState(), parent);
+    QueueKind queueKind = kind(source);
+    CompiledQueueSettings settings = settingsCompiler.compile(source,
+        parent == null ? null : parent.getSettings(), configuredLabels);
     QueuePlanNode compiled = new QueuePlanNode(source, parent, childPaths,
-        kind(source), capacities, maximumCapacities, declaredLabels,
-        effectiveLabels, configuredLabels, initialState, defaultExpression);
+        queueKind, capacities, maximumCapacities, declaredLabels,
+        effectiveLabels, configuredLabels, initialState, defaultExpression,
+        settings);
     queues.put(compiled.getQueuePath(), compiled);
     for (QueueConfigNode child : source.getChildren().values()) {
-      compileNode(model, child, compiled, queues);
+      compileNode(model, child, compiled, queues, settingsCompiler);
     }
     return compiled;
   }

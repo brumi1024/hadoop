@@ -73,7 +73,11 @@ public final class ChildrenCapacitySumRule implements ValidationRule {
         sum += LegacyCapacityDerivations.capacity(child.getQueuePath(),
             value, 0);
       }
-      if (percentage && configuredChild && Math.abs(sum - 100) > EPSILON) {
+      boolean allowedZeroSum = Math.abs(sum) <= EPSILON
+          && context.getPlan().getQueue(parent.getQueuePath())
+              .getSettings().isAllowZeroCapacitySum();
+      if (percentage && configuredChild && !allowedZeroSum
+          && Math.abs(sum - 100) > EPSILON) {
         sink.accept(new ValidationIssue(parent.getQueuePath(), null, id(),
             ValidationIssue.Severity.ERROR,
             "Illegal capacity sum of " + sum + " for children of queue "

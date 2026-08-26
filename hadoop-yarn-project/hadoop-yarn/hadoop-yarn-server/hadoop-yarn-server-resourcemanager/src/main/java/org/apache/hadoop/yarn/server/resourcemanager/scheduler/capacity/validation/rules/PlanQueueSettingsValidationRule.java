@@ -18,6 +18,7 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules;
 
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -29,6 +30,8 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerUtils;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector.ResourceUnitCapacityType;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.CompiledQueueSettings;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.CompiledQueueSettings.ResourceSetting;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan.QueueKind;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan.QueuePlanNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
@@ -83,6 +86,15 @@ public final class PlanQueueSettingsValidationRule implements ValidationRule {
     if (issue == null) {
       issue = validateAbsoluteResourceLimits(queue, parent,
           context.getFacts());
+    }
+    if (issue == null) {
+      issue = validateMaximumAllocation(queue, context);
+    }
+    if (issue == null) {
+      issue = validateApplicationLifetime(queue);
+    }
+    if (issue == null) {
+      issue = validateUserWeights(queue);
     }
     return issue;
   }
@@ -173,13 +185,15 @@ public final class PlanQueueSettingsValidationRule implements ValidationRule {
     for (ResourceInformation information : resource.getResources()) {
       resource.setResourceValue(information.getName(), 0);
     }
-    if (!vector.getDefinedCapacityTypes().equals(
-        Set.of(ResourceUnitCapacityType.ABSOLUTE))) {
+    if (!vector.getDefinedCapacityTypes().contains(
+        ResourceUnitCapacityType.ABSOLUTE)) {
       return resource;
     }
     for (QueueCapacityVector.QueueCapacityVectorEntry entry : vector) {
-      resource.setResourceValue(entry.getResourceName(),
-          (long) entry.getResourceValue());
+      if (entry.getVectorResourceType() == ResourceUnitCapacityType.ABSOLUTE) {
+        resource.setResourceValue(entry.getResourceName(),
+            (long) entry.getResourceValue());
+      }
     }
     return resource;
   }
@@ -188,6 +202,70 @@ public final class PlanQueueSettingsValidationRule implements ValidationRule {
       ClusterFacts facts) {
     return Resources.greaterThan(facts.getResourceCalculator(),
         facts.getClusterResource(), left, right);
+  }
+
+  private ValidationIssue validateMaximumAllocation(QueuePlanNode queue,
+      ValidationContext context) {
+    ResourceSetting maximum = queue.getSettings().getMaximumAllocation();
+    ResourceSetting clusterMaximum = context.getPlan().getSchedulerSettings()
+        .getMaximumAllocation();
+    for (Map.Entry<String, Long> entry : maximum.getValues().entrySet()) {
+      if (entry.getValue() > clusterMaximum.getValue(entry.getKey())) {
+        return error(queue,
+            "Queue maximum allocation cannot be larger than the cluster "
+                + "setting for queue " + queue.getQueuePath()
+                + " max allocation per queue: " + resourceText(maximum)
+                + " cluster setting: " + resourceText(clusterMaximum));
+      }
+    }
+    return null;
+  }
+
+  private ValidationIssue validateApplicationLifetime(QueuePlanNode queue) {
+    if (queue.getQueuePath().isRoot()) {
+      return null;
+    }
+    CompiledQueueSettings settings = queue.getSettings();
+    long maximum = settings.getMaximumApplicationLifetime();
+    long defaultLifetime = settings.getDefaultApplicationLifetime();
+    if (maximum > 0 && defaultLifetime > maximum) {
+      return error(queue, "Default lifetime " + defaultLifetime
+          + " can't exceed maximum lifetime " + maximum);
+    }
+    return null;
+  }
+
+  private ValidationIssue validateUserWeights(QueuePlanNode queue) {
+    if (queue.getKind() != QueueKind.LEAF) {
+      return null;
+    }
+    float queueUserLimit = Math.min(100.0f, queue.getUserLimit());
+    for (Map.Entry<String, Float> entry
+        : queue.getSettings().getUserWeights().entrySet()) {
+      float weight = entry.getValue();
+      if (weight < 0.0f || weight > 100.0f / queueUserLimit) {
+        return error(queue, "Weight (" + weight + ") for user \""
+            + entry.getKey() + "\" must be between 0 and 100 / "
+            + queueUserLimit + " (= " + 100.0f / queueUserLimit
+            + ", the number of concurrent active users in "
+            + queue.getQueuePath().getFullPath() + ")");
+      }
+    }
+    return null;
+  }
+
+  private String resourceText(ResourceSetting setting) {
+    StringBuilder result = new StringBuilder("<memory:")
+        .append(setting.getValue(ResourceInformation.MEMORY_URI))
+        .append(", vCores:")
+        .append(setting.getValue(ResourceInformation.VCORES_URI));
+    setting.getValues().forEach((name, value) -> {
+      if (!ResourceInformation.MEMORY_URI.equals(name)
+          && !ResourceInformation.VCORES_URI.equals(name)) {
+        result.append(", ").append(name).append(":").append(value);
+      }
+    });
+    return result.append(">").toString();
   }
 
   private QueuePlanNode parent(QueuePlanNode queue,
