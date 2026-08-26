@@ -46,6 +46,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueStateManager
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceLimits;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerDynamicEditException;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerQueueManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.server.resourcemanager.security.AppPriorityACLsManager;
 
 import org.apache.hadoop.classification.VisibleForTesting;
@@ -208,6 +209,44 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
 
     labelManager.reinitializeQueueLabels(getQueueToLabels());
     this.queueStateManager.initialize(this);
+  }
+
+  /**
+   * Reinitializes the live hierarchy from an already validated queue plan.
+   *
+   * @param newConf proposed scheduler configuration used by live adapters
+   * @param plan validated immutable queue plan
+   * @throws IOException when live materialization or queue replacement fails
+   */
+  public void reinitializeQueues(CapacitySchedulerConfiguration newConf,
+      ValidatedQueuePlan plan) throws IOException {
+    configuredNodeLabels = new ConfiguredNodeLabels(newConf);
+    CSQueue newRoot = new ValidatedQueuePlanMaterializer().materialize(plan,
+        this.csContext.getQueueContext(), queues);
+    CSQueueStore newQueues = new CSQueueStore();
+    addQueueTree(newRoot, newQueues);
+
+    updateQueues(queues, newQueues);
+    root.reinitialize(newRoot, this.csContext.getClusterResource());
+    setQueueAcls(authorizer, appPriorityACLManager, queues);
+
+    Resource clusterResource = this.csContext.getClusterResource();
+    root.updateClusterResource(clusterResource, new ResourceLimits(
+        clusterResource));
+
+    labelManager.reinitializeQueueLabels(getQueueToLabels());
+    this.queueStateManager.initialize(this);
+  }
+
+  private void addQueueTree(CSQueue queue, CSQueueStore store) {
+    store.add(queue);
+    List<CSQueue> childQueues = queue.getChildQueues();
+    if (childQueues == null) {
+      return;
+    }
+    for (CSQueue child : childQueues) {
+      addQueueTree(child, store);
+    }
   }
 
   /**

@@ -44,7 +44,12 @@ public final class CompileResult {
         issue.getSeverity() == ValidationIssue.Severity.ERROR);
   }
 
-  ValidationResult asValidationResult() {
+  /**
+   * Returns the structured validation result associated with this plan.
+   *
+   * @return immutable validation result
+   */
+  public ValidationResult asValidationResult() {
     return new ValidationResult(issues);
   }
 }

@@ -122,8 +122,10 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.Activi
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.AllocationState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.CSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CompileResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.MemoryAllocationRule;
@@ -467,12 +469,13 @@ public class CapacityScheduler extends
       throws IOException {
     CSConfigModel model = proposed.getModel();
     ClusterFacts facts = ClusterFacts.capture(this);
-    ValidationResult validation = new CSConfigValidationEngine()
-        .validate(model, facts);
+    CompileResult compiled = new CSConfigValidationEngine().compile(
+        model, facts);
+    ValidationResult validation = compiled.asValidationResult();
     if (!validation.isValid()) {
       throw validationFailure(validation);
     }
-    activateConfiguration(proposed, rmContext);
+    activateConfiguration(proposed, rmContext, compiled.getPlan());
   }
 
   /**
@@ -480,27 +483,27 @@ public class CapacityScheduler extends
    * while holding its serialization lock.
    * @param proposed proposed scheduler configuration
    * @param rmContext ResourceManager context
-   * @param validatedModel model already validated by the caller
-   * @param validatedFacts facts used for caller validation
+   * @param compiled compiled plan and validation result accepted by the caller
    * @throws IOException when queue replacement fails
    */
   @Private
   public void reinitializePreValidated(
       CapacitySchedulerConfiguration proposed, RMContext rmContext,
-      CSConfigModel validatedModel, ClusterFacts validatedFacts)
+      CompileResult compiled)
       throws IOException {
     Preconditions.checkNotNull(proposed);
     Preconditions.checkNotNull(rmContext);
-    Preconditions.checkNotNull(validatedModel);
-    Preconditions.checkNotNull(validatedFacts);
+    Preconditions.checkNotNull(compiled);
     Preconditions.checkState(getMutableConfProvider() != null
         && getMutableConfProvider().isMutationLockHeld(),
         "Mutation lock must be held for pre-validated reinitialization");
-    activateConfiguration(proposed, rmContext);
+    Preconditions.checkArgument(compiled.isValid(),
+        "Compiled queue plan must be valid");
+    activateConfiguration(proposed, rmContext, compiled.getPlan());
   }
 
   private void activateConfiguration(CapacitySchedulerConfiguration proposed,
-      RMContext rmContext) throws IOException {
+      RMContext rmContext, ValidatedQueuePlan plan) throws IOException {
     writeLock.lock();
     try {
       CapacitySchedulerConfiguration oldConf = this.conf;
@@ -510,7 +513,7 @@ public class CapacityScheduler extends
         LOG.info("Re-initializing queues...");
         refreshMaximumAllocation(
             ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
-        reinitializeQueues(this.conf);
+        reinitializeQueues(this.conf, plan);
       } catch (Throwable t) {
         this.conf = oldConf;
         reinitializeQueues(this.conf);
@@ -878,6 +881,19 @@ public class CapacityScheduler extends
   throws IOException {
     queueContext.reinitialize();
     this.queueManager.reinitializeQueues(newConf);
+    updatePlacementRules();
+
+    this.workflowPriorityMappingsMgr.initialize(this);
+
+    // Notify Preemption Manager
+    preemptionManager.refreshQueues(null, this.getRootQueue());
+  }
+
+  @Lock(CapacityScheduler.class)
+  private void reinitializeQueues(CapacitySchedulerConfiguration newConf,
+      ValidatedQueuePlan plan) throws IOException {
+    queueContext.reinitialize();
+    this.queueManager.reinitializeQueues(newConf, plan);
     updatePlacementRules();
 
     this.workflowPriorityMappingsMgr.initialize(this);

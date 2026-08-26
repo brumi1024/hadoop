@@ -31,8 +31,9 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfigurationProvider;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CompileResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.webapp.dao.QueueConfigInfo;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
@@ -132,7 +133,7 @@ public class TestMutableCSConfigurationProvider {
 
     assertTrue(result.isValid(), result.getIssues().toString());
     verify(cs).reinitializePreValidated(any(CapacitySchedulerConfiguration.class),
-        eq(rmContext), any(CSConfigModel.class), any(ClusterFacts.class));
+        eq(rmContext), any(CompileResult.class));
     verify(cs, never()).reinitializeValidatedConfiguration(
         any(CapacitySchedulerConfiguration.class), eq(rmContext));
   }
@@ -148,7 +149,8 @@ public class TestMutableCSConfigurationProvider {
 
     assertThrows(IllegalStateException.class, () ->
         scheduler.reinitializePreValidated(proposed, rmContext,
-            proposed.getModel(), ClusterFacts.empty()));
+            new CSConfigValidationEngine().compile(proposed.getModel(),
+                ClusterFacts.empty())));
   }
 
   @Test
