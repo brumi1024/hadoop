@@ -28,9 +28,9 @@ import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator;
 import org.junit.jupiter.api.Test;
 
@@ -248,7 +248,7 @@ public class TestCSConfigValidationEngine {
   }
 
   @Test
-  public void testManagedParentUsesIsolatedQueueTreeBuild() {
+  public void testManagedParentCompilesWithoutLiveQueueBuild() {
     CapacitySchedulerConfiguration conf = conf();
     conf.setQueues(ROOT, new String[]{"a"});
     conf.setCapacity(A, 100);
@@ -258,6 +258,67 @@ public class TestCSConfigValidationEngine {
         ClusterFacts.empty());
 
     assertTrue(result.isValid(), result.getIssues().toString());
+  }
+
+  @Test
+  public void testReservableParentIsRejectedFromCompiledPlan() {
+    CapacitySchedulerConfiguration conf = conf();
+    conf.setQueues(ROOT, new String[] {"a"});
+    conf.setQueues(A, new String[] {"a1"});
+    conf.setCapacity(A, 100);
+    conf.setCapacity(new QueuePath("root.a.a1"), 100);
+    conf.setReservable(A, true);
+
+    ValidationResult result = engine.validate(conf.getModel(),
+        ClusterFacts.empty());
+
+    assertFalse(result.isValid());
+    assertTrue(result.getIssues().stream().anyMatch(issue ->
+        "queue-tree-build".equals(issue.getRuleId())
+            && issue.getMessage().equals(
+                "Only Leaf Queues can be reservable for root.a")),
+        result.getIssues().toString());
+  }
+
+  @Test
+  public void testChildLabelsMustBeSubsetOfCompiledParentLabels() {
+    CapacitySchedulerConfiguration conf = conf();
+    conf.setQueues(ROOT, new String[] {"a"});
+    QueuePath a1 = new QueuePath("root.a.a1");
+    conf.setQueues(A, new String[] {"a1"});
+    conf.setCapacity(A, 100);
+    conf.setCapacity(a1, 100);
+    conf.setAccessibleNodeLabels(A, Set.of("blue"));
+    conf.setAccessibleNodeLabels(a1, Set.of("blue", "red"));
+
+    ValidationResult result = engine.validate(conf.getModel(),
+        ClusterFacts.empty());
+
+    assertFalse(result.isValid());
+    assertTrue(result.getIssues().stream().anyMatch(issue ->
+        "queue-tree-build".equals(issue.getRuleId())
+            && issue.getMessage().contains("these labels=[red]")),
+        result.getIssues().toString());
+  }
+
+  @Test
+  public void testLeafDefaultLabelMustBeAccessibleInCompiledPlan() {
+    CapacitySchedulerConfiguration conf = conf();
+    conf.setQueues(ROOT, new String[] {"a"});
+    conf.setCapacity(A, 100);
+    conf.setAccessibleNodeLabels(ROOT, Set.of("blue", "red"));
+    conf.setAccessibleNodeLabels(A, Set.of("blue"));
+    conf.setDefaultNodeLabelExpression(A, "red");
+
+    ValidationResult result = engine.validate(conf.getModel(),
+        ClusterFacts.empty());
+
+    assertFalse(result.isValid());
+    assertTrue(result.getIssues().stream().anyMatch(issue ->
+        "queue-tree-build".equals(issue.getRuleId())
+            && issue.getMessage().startsWith(
+                "Invalid default label expression of  queue=root.a")),
+        result.getIssues().toString());
   }
 
   @Test
@@ -451,13 +512,11 @@ public class TestCSConfigValidationEngine {
   }
 
   @Test
-  public void testHierarchyRulesSeeBuiltTreeAndContext() {
+  public void testHierarchyRulesSeeCompiledPlan() {
     CapacitySchedulerConfiguration conf = conf();
     conf.setQueues(ROOT, new String[] {"a"});
     conf.setCapacity(A, 100);
-    AtomicReference<CSQueue> root = new AtomicReference<>();
-    AtomicReference<ValidationQueueBuildContext> buildContext =
-        new AtomicReference<>();
+    AtomicReference<ValidatedQueuePlan> plan = new AtomicReference<>();
     ValidationRule rule = new ValidationRule() {
       @Override
       public String id() {
@@ -472,8 +531,7 @@ public class TestCSConfigValidationEngine {
       @Override
       public void run(ValidationContext context,
           java.util.function.Consumer<ValidationIssue> issueSink) {
-        root.set(context.getProposedRoot());
-        buildContext.set(context.getBuildContext());
+        plan.set(context.getPlan());
       }
     };
 
@@ -481,8 +539,8 @@ public class TestCSConfigValidationEngine {
         .validate(conf.getModel(), ClusterFacts.empty());
 
     assertTrue(result.isValid(), result.getIssues().toString());
-    assertNotNull(root.get());
-    assertNotNull(buildContext.get());
+    assertNotNull(plan.get());
+    assertEquals(2, plan.get().getQueues().size());
   }
 
   @Test

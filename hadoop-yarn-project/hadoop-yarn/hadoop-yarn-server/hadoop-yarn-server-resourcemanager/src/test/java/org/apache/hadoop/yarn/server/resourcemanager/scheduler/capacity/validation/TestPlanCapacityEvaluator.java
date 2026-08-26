@@ -28,13 +28,17 @@ import org.junit.jupiter.api.Test;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueCapacityHandler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityUpdateContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueUpdateWarning;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class TestPlanCapacityEvaluator {
   private static final QueuePath ROOT = new QueuePath("root");
@@ -42,7 +46,7 @@ public class TestPlanCapacityEvaluator {
   private static final QueuePath B = new QueuePath("root.b");
 
   @Test
-  public void testPercentageCapacityParity() {
+  public void testPercentageCapacityParity() throws Exception {
     CapacitySchedulerConfiguration conf = conf();
     conf.setQueues(ROOT, new String[] {"a", "b"});
     conf.setCapacity(A, 50);
@@ -52,7 +56,7 @@ public class TestPlanCapacityEvaluator {
   }
 
   @Test
-  public void testWeightCapacityParity() {
+  public void testWeightCapacityParity() throws Exception {
     CapacitySchedulerConfiguration conf = conf();
     conf.setQueues(ROOT, new String[] {"a", "b"});
     conf.setNonLabeledQueueWeight(A, 1);
@@ -62,7 +66,7 @@ public class TestPlanCapacityEvaluator {
   }
 
   @Test
-  public void testAbsoluteDownscaleParity() {
+  public void testAbsoluteDownscaleParity() throws Exception {
     CapacitySchedulerConfiguration conf = conf();
     conf.setQueues(ROOT, new String[] {"a", "b"});
     conf.setMinimumResourceRequirement("", A, Resource.newInstance(80, 8));
@@ -72,7 +76,7 @@ public class TestPlanCapacityEvaluator {
   }
 
   @Test
-  public void testMixedVectorParity() {
+  public void testMixedVectorParity() throws Exception {
     CapacitySchedulerConfiguration conf = conf();
     conf.setLegacyQueueModeEnabled(false);
     conf.setQueues(ROOT, new String[] {"a", "b"});
@@ -89,7 +93,7 @@ public class TestPlanCapacityEvaluator {
   }
 
   @Test
-  public void testLabeledPartitionParity() {
+  public void testLabeledPartitionParity() throws Exception {
     CapacitySchedulerConfiguration conf = conf();
     conf.setQueues(ROOT, new String[] {"a", "b"});
     conf.setMinimumResourceRequirement("", A, Resource.newInstance(50, 5));
@@ -115,21 +119,33 @@ public class TestPlanCapacityEvaluator {
   }
 
   private void assertParity(CapacitySchedulerConfiguration conf,
-      ClusterFacts facts) {
-    CompileResult legacy = new CSConfigValidationEngine().compile(
-        conf.getModel(), facts);
-    assertTrue(legacy.isValid(), legacy.getIssues().toString());
-
-    List<String> expected = legacy.getIssues().stream()
-        .filter(issue -> issue.getRuleId().startsWith("capacity-update-"))
-        .map(issue -> issue.getRuleId() + "|" + issue.getMessage())
+      ClusterFacts facts) throws Exception {
+    List<String> expected = legacyWarnings(conf, facts).stream()
+        .map(this::warningKey)
         .collect(Collectors.toList());
+    ValidatedQueuePlan plan = ValidatedQueuePlan.fromModel(conf.getModel());
     List<String> actual = new PlanCapacityEvaluator()
-        .evaluate(legacy.getPlan(), facts).stream()
+        .evaluate(plan, facts).stream()
         .map(this::warningKey)
         .collect(Collectors.toList());
 
     assertEquals(expected, actual);
+  }
+
+  private List<QueueUpdateWarning> legacyWarnings(
+      CapacitySchedulerConfiguration conf, ClusterFacts facts)
+      throws Exception {
+    ValidationQueueBuildContext buildContext =
+        new ValidationQueueBuildContext(conf.getModel(), facts);
+    CSQueue root = CapacitySchedulerQueueManager.buildQueueTreeForValidation(
+        buildContext, buildContext.getConfiguration());
+    CapacitySchedulerQueueCapacityHandler handler =
+        new CapacitySchedulerQueueCapacityHandler(
+            buildContext.getLabelManager(), buildContext.getConfiguration());
+    handler.updateRoot(root, facts.getClusterResource());
+    QueueCapacityUpdateContext update = handler.updateChildren(
+        facts.getClusterResource(), root);
+    return update.getUpdateWarnings();
   }
 
   private String warningKey(QueueUpdateWarning warning) {

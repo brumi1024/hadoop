@@ -18,7 +18,6 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation;
 
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 
 /** Validation context shared by validation rules, including attached results. */
@@ -26,8 +25,6 @@ public final class ValidationContext {
   private final CSConfigModel model;
   private final ClusterFacts facts;
   private final ValidatedQueuePlan plan;
-  private CSQueue proposedRoot;
-  private ValidationQueueBuildContext buildContext;
 
   ValidationContext(CSConfigModel model, ClusterFacts facts,
       ValidatedQueuePlan plan) {
@@ -47,16 +44,4 @@ public final class ValidationContext {
     return plan;
   }
 
-  public CSQueue getProposedRoot() {
-    return proposedRoot;
-  }
-
-  public ValidationQueueBuildContext getBuildContext() {
-    return buildContext;
-  }
-
-  void attachBuiltTree(CSQueue root, ValidationQueueBuildContext context) {
-    proposedRoot = root;
-    buildContext = context;
-  }
 }

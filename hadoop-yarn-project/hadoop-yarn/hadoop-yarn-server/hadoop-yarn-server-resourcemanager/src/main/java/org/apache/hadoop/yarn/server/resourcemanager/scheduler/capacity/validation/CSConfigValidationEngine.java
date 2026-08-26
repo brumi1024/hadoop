@@ -22,8 +22,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueManager;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.ConfigDiagnostic;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.AbsoluteParentMinCoverageRule;
@@ -35,6 +33,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validati
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.NestedManagedParentRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.PlacementRuleDuplicatesRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.PlacementRulesParseRule;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.PlanQueueSettingsValidationRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.QueueNameRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.VcoresAllocationRule;
 
@@ -57,7 +56,7 @@ public final class CSConfigValidationEngine {
         new PlacementRuleDuplicatesRule(), new QueueNameRule(),
         new CapacityModeUniformityRule(), new ChildrenCapacitySumRule(),
         new NestedManagedParentRule(), new HierarchyTransitionRule(),
-        new AbsoluteParentMinCoverageRule(),
+        new AbsoluteParentMinCoverageRule(), new PlanQueueSettingsValidationRule(),
         new PlacementRulesParseRule(), new CapacityVectorUpdateRule()));
   }
 
@@ -92,30 +91,9 @@ public final class CSConfigValidationEngine {
     runStage(ValidationRule.Stage.MODEL, context, issues);
     if (issues.stream().noneMatch(issue ->
         issue.getSeverity() == ValidationIssue.Severity.ERROR)) {
-      buildHierarchy(context, issues);
-    }
-    if (issues.stream().noneMatch(issue ->
-        issue.getSeverity() == ValidationIssue.Severity.ERROR)) {
       runStage(ValidationRule.Stage.HIERARCHY, context, issues);
     }
     return new CompileResult(plan, issues);
-  }
-
-  private void buildHierarchy(ValidationContext context,
-      List<ValidationIssue> issues) {
-    try {
-      ValidationQueueBuildContext buildContext =
-          new ValidationQueueBuildContext(context.getModel(), context.getFacts());
-      CSQueue proposedRoot = CapacitySchedulerQueueManager
-          .buildQueueTreeForValidation(buildContext,
-          buildContext.getConfiguration());
-      context.attachBuiltTree(proposedRoot, buildContext);
-    } catch (Throwable failure) {
-      issues.add(new ValidationIssue(null, null, "queue-tree-build",
-          ValidationIssue.Severity.ERROR,
-          failure.getMessage() == null ? failure.getClass().getSimpleName()
-              : failure.getMessage()));
-    }
   }
 
   private void runStage(ValidationRule.Stage stage, ValidationContext context,

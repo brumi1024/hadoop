@@ -20,11 +20,10 @@ package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validat
 import java.util.Locale;
 import java.util.function.Consumer;
 
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueCapacityHandler;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityUpdateContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueUpdateWarning;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueUpdateWarning.QueueUpdateWarningType;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.PlanCapacityEvaluator;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationRule;
@@ -53,31 +52,22 @@ public final class CapacityVectorUpdateRule implements ValidationRule {
   @Override
   public void run(ValidationContext context,
       Consumer<ValidationIssue> sink) {
-    if (context.getProposedRoot() == null
-        || context.getFacts().isHierarchyValidationSkipped()
+    if (context.getFacts().isHierarchyValidationSkipped()
         || Resources.isNone(context.getFacts().getClusterResource())) {
       return;
     }
     try {
-      CapacitySchedulerQueueCapacityHandler handler =
-          new CapacitySchedulerQueueCapacityHandler(
-              context.getBuildContext().getLabelManager(),
-              context.getBuildContext().getConfiguration());
-      handler.updateRoot(context.getProposedRoot(),
-          context.getFacts().getClusterResource());
-      QueueCapacityUpdateContext updateContext = handler.updateChildren(
-          context.getFacts().getClusterResource(),
-          context.getProposedRoot());
-      emitWarnings(updateContext, sink);
+      emitWarnings(new PlanCapacityEvaluator().evaluate(context.getPlan(),
+          context.getFacts()), sink);
     } catch (Throwable failure) {
       sink.accept(new ValidationIssue(null, null, "capacity-update-failure",
           ValidationIssue.Severity.ERROR, message(failure)));
     }
   }
 
-  private void emitWarnings(QueueCapacityUpdateContext updateContext,
+  private void emitWarnings(Iterable<QueueUpdateWarning> warnings,
       Consumer<ValidationIssue> sink) {
-    for (QueueUpdateWarning warning : updateContext.getUpdateWarnings()) {
+    for (QueueUpdateWarning warning : warnings) {
       QueueUpdateWarningType warningType = warning.getWarningType();
       String ruleId = "capacity-update-" + warningType.name()
           .toLowerCase(Locale.ROOT).replace('_', '-');
