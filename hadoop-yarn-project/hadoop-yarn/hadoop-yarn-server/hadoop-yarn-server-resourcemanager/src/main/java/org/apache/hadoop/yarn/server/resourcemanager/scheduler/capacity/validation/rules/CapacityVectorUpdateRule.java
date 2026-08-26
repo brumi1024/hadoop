@@ -30,13 +30,14 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validati
 import org.apache.hadoop.yarn.util.resource.Resources;
 
 /**
- * Applies the capacity-vector calculations to the isolated validation tree.
+ * Applies capacity-vector calculations to the compiled queue plan.
  *
- * <p>The validation context uses a fresh preemption manager, so it reports no
- * killable resources. A live resource manager can have active preemption and
- * therefore produce different warning outcomes on refresh. This rule is
- * warning-only for those outcomes, and the fresh-boot state is the documented
- * validation baseline.</p>
+ * <p>The plan evaluator has no live preemption state, so it reports no
+ * killable resources.
+ * A live resource manager can have active preemption and therefore produce
+ * different warning outcomes on refresh.
+ * This rule is warning-only for those outcomes, and the no-killable-resource
+ * state is the documented validation baseline.</p>
  */
 public final class CapacityVectorUpdateRule implements ValidationRule {
   @Override

@@ -32,12 +32,14 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCap
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.CompiledQueueSettings;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.CompiledQueueSettings.ResourceSetting;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan.CapacitySetting;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan.QueueKind;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.plan.ValidatedQueuePlan.QueuePlanNode;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationRule;
+import org.apache.hadoop.yarn.util.resource.ResourceUtils;
 import org.apache.hadoop.yarn.util.resource.Resources;
 
 /**
@@ -84,8 +86,7 @@ public final class PlanQueueSettingsValidationRule implements ValidationRule {
       issue = validateDefaultLabelExpression(queue);
     }
     if (issue == null) {
-      issue = validateAbsoluteResourceLimits(queue, parent,
-          context.getFacts());
+      issue = validateAbsoluteResourceLimits(queue, parent, context);
     }
     if (issue == null) {
       issue = validateMaximumAllocation(queue, context);
@@ -154,15 +155,18 @@ public final class PlanQueueSettingsValidationRule implements ValidationRule {
   }
 
   private ValidationIssue validateAbsoluteResourceLimits(QueuePlanNode queue,
-      QueuePlanNode parent, ClusterFacts facts) {
+      QueuePlanNode parent, ValidationContext context) {
+    ClusterFacts facts = context.getFacts();
+    Set<String> configuredResourceTypes = configuredResourceTypes(
+        context.getPlan().getResourceTypes());
     for (String label : queue.getConfiguredNodeLabels()) {
-      Resource minimum = absoluteResource(queue.getCapacity(label).getVector(),
-          facts);
-      Resource maximum = absoluteResource(
-          queue.getMaximumCapacity(label).getVector(), facts);
+      Resource minimum = absoluteResource(queue.getCapacity(label),
+          configuredResourceTypes);
+      Resource maximum = absoluteResource(queue.getMaximumCapacity(label),
+          configuredResourceTypes);
       if (parent != null) {
         Resource parentMaximum = absoluteResource(
-            parent.getMaximumCapacity(label).getVector(), facts);
+            parent.getMaximumCapacity(label), configuredResourceTypes);
         if (!Resources.isNone(parentMaximum)
             && exceeds(maximum, parentMaximum, facts)) {
           return error(queue, "Max resource configuration " + maximum
@@ -179,23 +183,43 @@ public final class PlanQueueSettingsValidationRule implements ValidationRule {
     return null;
   }
 
-  private Resource absoluteResource(QueueCapacityVector vector,
-      ClusterFacts facts) {
-    Resource resource = Resource.newInstance(facts.getClusterResource());
-    for (ResourceInformation information : resource.getResources()) {
-      resource.setResourceValue(information.getName(), 0);
+  private Resource absoluteResource(CapacitySetting setting,
+      Set<String> configuredResourceTypes) {
+    Resource resource = Resource.newInstance(0, 0);
+    if (setting == null || setting.getRawValue() == null) {
+      return resource;
     }
-    if (!vector.getDefinedCapacityTypes().contains(
-        ResourceUnitCapacityType.ABSOLUTE)) {
+    QueueCapacityVector vector = setting.getVector();
+    if (!vector.getDefinedCapacityTypes().equals(
+        Set.of(ResourceUnitCapacityType.ABSOLUTE))) {
       return resource;
     }
     for (QueueCapacityVector.QueueCapacityVectorEntry entry : vector) {
       if (entry.getVectorResourceType() == ResourceUnitCapacityType.ABSOLUTE) {
-        resource.setResourceValue(entry.getResourceName(),
-            (long) entry.getResourceValue());
+        String name = entry.getResourceName();
+        long amount = (long) entry.getResourceValue();
+        if (ResourceInformation.MEMORY_URI.equals(name)) {
+          resource.setMemorySize(amount);
+        } else if (ResourceInformation.VCORES_URI.equals(name)) {
+          resource.setVirtualCores((int) amount);
+        } else if (configuredResourceTypes.contains(name)
+            || ResourceUtils.getResourceTypes().containsKey(name)) {
+          resource.setResourceInformation(name,
+              ResourceInformation.newInstance(name, amount));
+        }
       }
     }
     return resource;
+  }
+
+  private Set<String> configuredResourceTypes(String resourceTypes) {
+    Set<String> result = new LinkedHashSet<>();
+    for (String resourceType : resourceTypes.split(",")) {
+      if (!resourceType.trim().isEmpty()) {
+        result.add(resourceType.trim());
+      }
+    }
+    return result;
   }
 
   private boolean exceeds(Resource left, Resource right,

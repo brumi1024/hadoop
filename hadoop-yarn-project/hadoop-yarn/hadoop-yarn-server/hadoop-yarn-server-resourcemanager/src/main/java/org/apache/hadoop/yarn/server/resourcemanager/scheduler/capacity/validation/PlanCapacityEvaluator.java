@@ -296,8 +296,15 @@ public final class PlanCapacityEvaluator {
               * remainingRatio(label, resourceName)
               * entry.getResourceValue() / 100;
         case WEIGHT:
-          double normalizedWeight = entry.getResourceValue()
-              / weightSums.get(label).get(resourceName);
+          Map<String, Double> labelWeightSums = weightSums.get(label);
+          Double totalWeight = labelWeightSums == null
+              ? null : labelWeightSums.get(resourceName);
+          if (totalWeight == null || totalWeight == 0) {
+            throw new IllegalStateException("Missing weight sum for queue "
+                + child.plan.getQueuePath() + ", label " + label
+                + ", resource " + resourceName);
+          }
+          double normalizedWeight = entry.getResourceValue() / totalWeight;
           double remaining = batchRemaining.get(label).get(resourceName);
           if (normalizedWeight == 1) {
             return remaining;

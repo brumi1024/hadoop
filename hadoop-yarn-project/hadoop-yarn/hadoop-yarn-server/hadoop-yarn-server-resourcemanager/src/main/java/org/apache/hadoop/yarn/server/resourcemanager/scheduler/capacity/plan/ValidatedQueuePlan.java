@@ -62,7 +62,7 @@ public final class ValidatedQueuePlan {
       this.rawValue = value == null ? null : value.getRawValue();
       QueueCapacityVector configured = value == null
           ? null : value.getVector();
-      this.vector = copyVector(configured == null
+      this.vector = copyVector(configured == null || rawValue == null
           || fallbackWhenEmpty && configured.isEmpty()
               ? fallback : configured);
     }

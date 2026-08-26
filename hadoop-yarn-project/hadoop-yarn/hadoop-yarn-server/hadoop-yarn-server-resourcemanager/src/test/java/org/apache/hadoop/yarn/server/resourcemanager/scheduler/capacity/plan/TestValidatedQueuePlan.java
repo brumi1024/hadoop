@@ -127,6 +127,24 @@ public class TestValidatedQueuePlan {
   }
 
   @Test
+  public void testMissingCapacityUsesZeroResourceVector() {
+    CapacitySchedulerConfiguration conf = conf();
+    QueuePath missing = new QueuePath("root.missing");
+    conf.setQueues(ROOT, new String[] {"missing"});
+
+    QueuePlanNode node = ValidatedQueuePlan.fromModel(conf.getModel())
+        .getQueue(missing);
+
+    assertNull(node.getCapacity("").getRawValue());
+    assertEquals(0, node.getCapacity("").getVector()
+        .getResource(ResourceInformation.MEMORY_URI).getResourceValue());
+    assertEquals(QueueCapacityVector.ResourceUnitCapacityType.ABSOLUTE,
+        node.getCapacity("").getVector()
+            .getResource(ResourceInformation.MEMORY_URI)
+            .getVectorResourceType());
+  }
+
+  @Test
   public void testCompileResultCarriesPlanAndStructuredIssues() {
     CapacitySchedulerConfiguration conf = conf();
     conf.setQueues(ROOT, new String[] {"a", "b"});
