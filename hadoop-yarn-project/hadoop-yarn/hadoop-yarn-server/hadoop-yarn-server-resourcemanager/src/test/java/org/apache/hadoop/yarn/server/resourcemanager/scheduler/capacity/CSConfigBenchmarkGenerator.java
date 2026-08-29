@@ -32,7 +32,8 @@ import static org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableSe
 /**
  * Generates synthetic but structurally realistic capacity-scheduler
  * configuration content for a requested queue count.
- * The output benchmarks the config load, reinitialize, and validate paths.
+ * The output benchmarks configuration model construction, validation, queue
+ * materialization, activation, and complete atomic mutation apply.
  * Use it with {@link CSConfigBaselineBenchmark}, running each requested size in
  * a separate forked JVM and controlling the run with {@code cs.bench.sizes},
  * {@code cs.bench.iterations}, and {@code cs.bench.warmups}.
