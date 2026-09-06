@@ -724,12 +724,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
 
   private void throwExceptionForUnexpectedWeight(float weight, QueuePath queue,
       String label) {
-    if ((weight < -1e-6 && Math.abs(weight + 1) > 1e-6) || weight > 10000) {
-      throw new IllegalArgumentException(
-          "Illegal " + "weight=" + weight + " for queue=" + queue.getFullPath() + "label="
-              + label
-              + ". Acceptable values: [0, 10000], -1 is same as not set");
-    }
+    LegacyCapacityDerivations.validateWeight(weight, queue, label);
   }
 
   public float getNonLabeledQueueWeight(QueuePath queue) {
@@ -758,11 +753,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     float capacity = LegacyCapacityDerivations.capacity(queue,
         getEffectiveQueueNode(queue).getCapacity(RMNodeLabelsManager.NO_LABEL),
         0f);
-    if (capacity < MINIMUM_CAPACITY_VALUE
-        || capacity > MAXIMUM_CAPACITY_VALUE) {
-      throw new IllegalArgumentException(
-          "Illegal " + "capacity of " + capacity + " for queue " + queue.getFullPath());
-    }
+    LegacyCapacityDerivations.validateCapacity(capacity, queue, null);
     LOG.debug("CSConf - getCapacity: queuePrefix={}, capacity={}",
         getQueuePrefix(queue), capacity);
 
@@ -992,13 +983,7 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     float capacity = suffix.equals(MAXIMUM_CAPACITY)
         ? LegacyCapacityDerivations.maximumCapacity(queue, value)
         : LegacyCapacityDerivations.capacity(queue, value, defaultValue);
-    if (capacity < MINIMUM_CAPACITY_VALUE
-        || capacity > MAXIMUM_CAPACITY_VALUE) {
-      throw new IllegalArgumentException(
-          "Illegal capacity of " + capacity + " for node-label=" + label
-              + " in queue=" + queue
-              + ", valid capacity should in range of [0, 100].");
-    }
+    LegacyCapacityDerivations.validateCapacity(capacity, queue, label);
     if (LOG.isDebugEnabled()) {
       LOG.debug(
           "CSConf - getCapacityOfLabel: prefix=" + getNodeLabelPrefix(queue,

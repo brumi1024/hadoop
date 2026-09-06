@@ -18,22 +18,29 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation;
 
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.AbstractAutoCreatedLeafQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.AbstractCSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.AbstractParentQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.ManagedParentQueue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.PlanQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueStateHelper;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.ReservationQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 import org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator;
@@ -44,7 +51,7 @@ import org.apache.hadoop.yarn.util.resource.Resources;
 public final class ClusterFacts {
   /** Queue shape relevant to refresh transition checks. */
   public enum QueueKind {
-    LEAF, PARENT, MANAGED_PARENT
+    LEAF, PARENT, MANAGED_PARENT, PLAN, RESERVATION
   }
 
   public static final class OldQueue {
@@ -82,8 +89,15 @@ public final class ClusterFacts {
   private final Resource minimumAllocation;
   private final Resource maximumAllocation;
   private final ResourceCalculator resourceCalculator;
+  private final String resourceCalculatorClassName;
   private final Set<String> nodeLabels;
   private final Map<String, Resource> resourcesByLabel;
+  private final Map<String, Long> clusterResourceValues;
+  private final Map<String, Long> minimumAllocationValues;
+  private final Map<String, Long> maximumAllocationValues;
+  private final Map<String, Map<String, Long>> resourceValuesByLabel;
+  private final List<String> resourceNames;
+  private final Map<String, String> resourceUnits;
   private final Map<QueuePath, OldQueue> oldHierarchy;
   private final boolean hierarchyValidationSkipped;
 
@@ -97,9 +111,25 @@ public final class ClusterFacts {
     this.maximumAllocation = cloneOrNone(maximumAllocation);
     this.resourceCalculator = resourceCalculator == null
         ? new DefaultResourceCalculator() : resourceCalculator;
+    this.resourceCalculatorClassName = this.resourceCalculator.getClass()
+        .getName();
     this.nodeLabels = Collections.unmodifiableSet(new LinkedHashSet<>(
         nodeLabels));
     this.resourcesByLabel = immutableResourceMap(resourcesByLabel);
+    this.clusterResourceValues = resourceValues(this.clusterResource);
+    this.minimumAllocationValues = resourceValues(this.minimumAllocation);
+    this.maximumAllocationValues = resourceValues(this.maximumAllocation);
+    this.resourceValuesByLabel = resourceValueMap(this.resourcesByLabel);
+    LinkedHashSet<String> names = new LinkedHashSet<>();
+    names.addAll(clusterResourceValues.keySet());
+    names.addAll(minimumAllocationValues.keySet());
+    names.addAll(maximumAllocationValues.keySet());
+    resourceValuesByLabel.values().forEach(values ->
+        names.addAll(values.keySet()));
+    this.resourceNames = List.copyOf(names);
+    this.resourceUnits = resourceUnits(this.clusterResource,
+        this.minimumAllocation, this.maximumAllocation,
+        this.resourcesByLabel);
     this.oldHierarchy = Collections.unmodifiableMap(
         new LinkedHashMap<>(oldHierarchy));
     this.hierarchyValidationSkipped = hierarchyValidationSkipped;
@@ -186,7 +216,11 @@ public final class ClusterFacts {
     if (scheduler.getCapacitySchedulerQueueManager() != null) {
       for (CSQueue queue : scheduler.getCapacitySchedulerQueueManager()
           .getQueues().values()) {
-        QueueKind kind = queue instanceof ManagedParentQueue
+        QueueKind kind = queue instanceof PlanQueue
+            ? QueueKind.PLAN
+            : queue instanceof ReservationQueue
+                ? QueueKind.RESERVATION
+                : queue instanceof ManagedParentQueue
             ? QueueKind.MANAGED_PARENT
             : queue instanceof AbstractParentQueue
                 ? QueueKind.PARENT : QueueKind.LEAF;
@@ -230,12 +264,25 @@ public final class ClusterFacts {
       return live;
     }
     Map<QueuePath, OldQueue> hierarchy = new LinkedHashMap<>();
+    Map<QueuePath, QueueState> resolvedStates = new LinkedHashMap<>();
     for (QueueConfigNode node : currentModel.getNodes().values()) {
-      QueueKind kind = node.isAutoCreateChildQueueEnabled()
+      QueueKind kind = ConfigurationValueParsers.parseBoolean(
+          node.getRawProperty(CapacitySchedulerConfiguration.IS_RESERVABLE),
+          false)
+          ? QueueKind.PLAN
+          : node.isAutoCreateChildQueueEnabled()
           ? QueueKind.MANAGED_PARENT
           : node.getChildren().isEmpty() ? QueueKind.LEAF : QueueKind.PARENT;
-      hierarchy.put(node.getQueuePath(), new OldQueue(kind, node.getState(),
-          false, false));
+      QueueConfigNode parent = node.getParent();
+      QueueState parentState = parent == null ? null
+          : resolvedStates.get(parent.getQueuePath());
+      QueueState state = QueueStateHelper.resolveInitialState(
+          node.getQueuePath().getFullPath(),
+          parent == null ? null : parent.getQueuePath().getFullPath(),
+          node.getState(), parentState).state();
+      resolvedStates.put(node.getQueuePath(), state);
+      hierarchy.put(node.getQueuePath(), new OldQueue(kind, state, false,
+          false));
     }
     return new ClusterFacts(live.clusterResource, live.minimumAllocation,
         live.maximumAllocation, live.resourceCalculator, live.nodeLabels,
@@ -259,11 +306,44 @@ public final class ClusterFacts {
   public ResourceCalculator getResourceCalculator() {
     return resourceCalculator;
   }
+  /**
+   * Returns the captured calculator descriptor without invoking calculator
+   * behavior. Compiled validation normalizes this descriptor and never keeps
+   * the live plugin instance.
+   * @return captured resource-calculator class name
+   */
+  public String getResourceCalculatorClassName() {
+    return resourceCalculatorClassName;
+  }
   public Set<String> getNodeLabels() {
     return nodeLabels;
   }
   public Map<String, Resource> getResourcesByLabel() {
     return resourcesByLabel;
+  }
+
+  Map<String, Long> getClusterResourceValues() {
+    return clusterResourceValues;
+  }
+
+  Map<String, Long> getMinimumAllocationValues() {
+    return minimumAllocationValues;
+  }
+
+  Map<String, Long> getMaximumAllocationValues() {
+    return maximumAllocationValues;
+  }
+
+  Map<String, Map<String, Long>> getResourceValuesByLabel() {
+    return resourceValuesByLabel;
+  }
+
+  List<String> getResourceNames() {
+    return resourceNames;
+  }
+
+  Map<String, String> getResourceUnits() {
+    return resourceUnits;
   }
   public Map<QueuePath, OldQueue> getOldHierarchy() {
     return oldHierarchy;
@@ -277,5 +357,38 @@ public final class ClusterFacts {
     Map<String, Resource> copy = new LinkedHashMap<>();
     source.forEach((label, resource) -> copy.put(label, cloneOrNone(resource)));
     return Collections.unmodifiableMap(copy);
+  }
+
+  private static Map<String, Long> resourceValues(Resource resource) {
+    Map<String, Long> values = new LinkedHashMap<>();
+    for (ResourceInformation information : resource.getResources()) {
+      values.put(information.getName(), information.getValue());
+    }
+    return Collections.unmodifiableMap(values);
+  }
+
+  private static Map<String, Map<String, Long>> resourceValueMap(
+      Map<String, Resource> resources) {
+    Map<String, Map<String, Long>> values = new LinkedHashMap<>();
+    resources.forEach((label, resource) ->
+        values.put(label, resourceValues(resource)));
+    return Collections.unmodifiableMap(values);
+  }
+
+  private static Map<String, String> resourceUnits(Resource cluster,
+      Resource minimum, Resource maximum,
+      Map<String, Resource> resourcesByLabel) {
+    Map<String, String> units = new LinkedHashMap<>();
+    List<Resource> resources = new ArrayList<>();
+    resources.add(cluster);
+    resources.add(minimum);
+    resources.add(maximum);
+    resources.addAll(resourcesByLabel.values());
+    for (Resource resource : resources) {
+      for (ResourceInformation information : resource.getResources()) {
+        units.putIfAbsent(information.getName(), information.getUnits());
+      }
+    }
+    return Collections.unmodifiableMap(units);
   }
 }

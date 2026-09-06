@@ -28,15 +28,15 @@ public class PercentageQueueCapacityCalculator extends AbstractQueueCapacityCalc
       String label) {
     String resourceName = context.getResourceName();
 
-    double parentAbsoluteCapacity = resourceCalculationDriver.getParentAbsoluteMinCapacity(label,
-        resourceName);
-    double remainingPerEffectiveResourceRatio =
-        resourceCalculationDriver.getRemainingRatioOfResource(label, resourceName);
-    double absoluteCapacity = parentAbsoluteCapacity * remainingPerEffectiveResourceRatio
-        * context.getCurrentMinimumCapacityEntry(label).getResourceValue() / 100;
-
-    return resourceCalculationDriver.getUpdateContext().getUpdatedClusterResource(label)
-        .getResourceValue(resourceName) * absoluteCapacity;
+    long cluster = resourceCalculationDriver.getUpdateContext()
+        .getUpdatedClusterResource(label).getResourceValue(resourceName);
+    long parentMinimum = resourceCalculationDriver.getQueue()
+        .getEffectiveCapacity(label).getResourceValue(resourceName);
+    double remaining = resourceCalculationDriver
+        .getBatchRemainingResource(label).getValue(resourceName);
+    return QueueCapacityCalculationKernel.percentageMinimum(cluster,
+        parentMinimum, remaining,
+        context.getCurrentMinimumCapacityEntry(label).getResourceValue());
   }
 
   @Override
@@ -45,13 +45,13 @@ public class PercentageQueueCapacityCalculator extends AbstractQueueCapacityCalc
       String label) {
     String resourceName = context.getResourceName();
 
-    double parentAbsoluteMaxCapacity =
-        resourceCalculationDriver.getParentAbsoluteMaxCapacity(label, resourceName);
-    double absoluteMaxCapacity = parentAbsoluteMaxCapacity
-        * context.getCurrentMaximumCapacityEntry(label).getResourceValue() / 100;
-
-    return resourceCalculationDriver.getUpdateContext().getUpdatedClusterResource(label)
-        .getResourceValue(resourceName) * absoluteMaxCapacity;
+    long cluster = resourceCalculationDriver.getUpdateContext()
+        .getUpdatedClusterResource(label).getResourceValue(resourceName);
+    long parentMaximum = resourceCalculationDriver.getQueue()
+        .getEffectiveMaxCapacity(label).getResourceValue(resourceName);
+    return QueueCapacityCalculationKernel.percentageMaximum(cluster,
+        parentMaximum,
+        context.getCurrentMaximumCapacityEntry(label).getResourceValue());
   }
 
   @Override

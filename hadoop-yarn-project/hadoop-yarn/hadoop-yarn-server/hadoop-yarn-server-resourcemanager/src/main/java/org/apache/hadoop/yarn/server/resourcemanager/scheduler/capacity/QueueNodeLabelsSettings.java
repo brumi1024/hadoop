@@ -17,10 +17,11 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.hadoop.util.Sets;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -29,73 +30,71 @@ import java.util.Set;
  * properties.
  */
 public class QueueNodeLabelsSettings {
-  private final CSQueue parent;
-  private final QueuePath queuePath;
   private Set<String> accessibleLabels;
   private Set<String> configuredNodeLabels;
   private String defaultLabelExpression;
 
   public QueueNodeLabelsSettings(QueueConfigNode queueNode, CSQueue parent,
       Set<String> configuredNodeLabels) throws IOException {
-    this.parent = parent;
-    this.queuePath = queueNode.getQueuePath();
-    initializeNodeLabels(queueNode, configuredNodeLabels);
+    QueuePath queuePath = queueNode.getQueuePath();
+    ResolvedNodeLabels resolved = resolve(queuePath.getFullPath(),
+        queuePath.isRoot(), queueNode.getAccessibleNodeLabels(),
+        queueNode.getDefaultNodeLabelExpression(), configuredNodeLabels,
+        parent == null ? null : parent.getAccessibleNodeLabels(),
+        parent == null ? null : parent.getDefaultNodeLabelExpression());
+    this.accessibleLabels = resolved.accessibleLabels();
+    this.defaultLabelExpression = resolved.defaultLabelExpression();
+    this.configuredNodeLabels = resolved.configuredNodeLabels();
   }
 
-  private void initializeNodeLabels(QueueConfigNode queueNode,
-      Set<String> configuredNodeLabels)
-      throws IOException {
-    initializeAccessibleLabels(queueNode);
-    initializeDefaultLabelExpression(queueNode);
-    initializeConfiguredNodeLabels(configuredNodeLabels);
-    validateNodeLabels();
-  }
-
-  private void initializeAccessibleLabels(QueueConfigNode queueNode) {
-    this.accessibleLabels = queueNode.getAccessibleNodeLabels();
-    // Inherit labels from parent if not set
-    if (this.accessibleLabels == null && parent != null) {
-      this.accessibleLabels = parent.getAccessibleNodeLabels();
+  /** Immutable result of node-label inheritance and validation. */
+  public record ResolvedNodeLabels(Set<String> accessibleLabels,
+      Set<String> configuredNodeLabels, String defaultLabelExpression) {
+    public ResolvedNodeLabels {
+      accessibleLabels = immutableSet(accessibleLabels);
+      configuredNodeLabels = immutableSet(configuredNodeLabels);
     }
   }
 
-  private void initializeDefaultLabelExpression(QueueConfigNode queueNode) {
-    this.defaultLabelExpression = queueNode.getDefaultNodeLabelExpression();
-    // If the accessible labels is not null and the queue has a parent with a
-    // similar set of labels copy the defaultNodeLabelExpression from the parent
-    if (this.accessibleLabels != null && parent != null
-        && this.defaultLabelExpression == null &&
-        this.accessibleLabels.containsAll(parent.getAccessibleNodeLabels())) {
-      this.defaultLabelExpression = parent.getDefaultNodeLabelExpression();
+  /**
+   * Resolves label settings without consulting a queue or label manager.
+   * @throws IOException when child labels exceed the parent's label access
+   */
+  public static ResolvedNodeLabels resolve(String queuePath, boolean root,
+      Set<String> declaredAccessibleLabels,
+      String declaredDefaultLabelExpression,
+      Set<String> configuredNodeLabels, Set<String> parentAccessibleLabels,
+      String parentDefaultLabelExpression) throws IOException {
+    Set<String> accessible = declaredAccessibleLabels == null
+        ? parentAccessibleLabels : declaredAccessibleLabels;
+    Set<String> accessibleCopy = accessible == null
+        ? Collections.emptySet() : new LinkedHashSet<>(accessible);
+    String defaultExpression = declaredDefaultLabelExpression;
+    if (!root && defaultExpression == null && parentAccessibleLabels != null
+        && accessibleCopy.containsAll(parentAccessibleLabels)) {
+      defaultExpression = parentDefaultLabelExpression;
     }
-  }
-
-  private void initializeConfiguredNodeLabels(
-      Set<String> configuredNodeLabelsParam) {
-    this.configuredNodeLabels = configuredNodeLabelsParam;
-  }
-
-  private void validateNodeLabels() throws IOException {
-    // Check if labels of this queue is a subset of parent queue, only do this
-    // when the queue in question is not root
-    if (!queuePath.isRoot()) {
-      if (parent.getAccessibleNodeLabels() != null && !parent
-          .getAccessibleNodeLabels().contains(RMNodeLabelsManager.ANY)) {
-        // If parent isn't "*", child shouldn't be "*" too
-        if (this.getAccessibleNodeLabels().contains(RMNodeLabelsManager.ANY)) {
-          throw new IOException("Parent's accessible queue is not ANY(*), "
-              + "but child's accessible queue is " + RMNodeLabelsManager.ANY);
-        } else {
-          Set<String> diff = Sets.difference(this.getAccessibleNodeLabels(),
-              parent.getAccessibleNodeLabels());
-          if (!diff.isEmpty()) {
-            throw new IOException(String.format(
-                "Some labels of child queue is not a subset of parent queue, these labels=[%s]",
-                StringUtils.join(diff, ",")));
-          }
-        }
+    if (!root && parentAccessibleLabels != null
+        && !parentAccessibleLabels.contains(RMNodeLabelsManager.ANY)) {
+      if (accessibleCopy.contains(RMNodeLabelsManager.ANY)) {
+        throw new IOException("Parent's accessible queue is not ANY(*), "
+            + "but child's accessible queue is " + RMNodeLabelsManager.ANY);
+      }
+      Set<String> difference = new LinkedHashSet<>(accessibleCopy);
+      difference.removeAll(parentAccessibleLabels);
+      if (!difference.isEmpty()) {
+        throw new IOException(String.format(
+            "Some labels of child queue is not a subset of parent queue, "
+                + "these labels=[%s]", StringUtils.join(difference, ",")));
       }
     }
+    return new ResolvedNodeLabels(accessibleCopy, configuredNodeLabels,
+        defaultExpression);
+  }
+
+  private static Set<String> immutableSet(Set<String> values) {
+    return Collections.unmodifiableSet(new LinkedHashSet<>(
+        values == null ? Collections.emptySet() : values));
   }
 
   public boolean isAccessibleToPartition(String nodePartition) {

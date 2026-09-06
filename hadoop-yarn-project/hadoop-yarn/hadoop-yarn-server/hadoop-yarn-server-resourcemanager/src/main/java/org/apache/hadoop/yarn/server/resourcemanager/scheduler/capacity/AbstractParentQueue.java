@@ -205,74 +205,23 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
   // return true when all children use weight mode.
   public QueueCapacityType getCapacityConfigurationTypeForQueues(
       Collection<CSQueue> queues) throws IOException {
-    // Do we have ANY queue set capacity in any labels?
-    boolean percentageIsSet = false;
-
-    // Do we have ANY queue set weight in any labels?
-    boolean weightIsSet = false;
-
-    // Do we have ANY queue set absolute in any labels?
-    boolean absoluteMinResSet = false;
-
-    StringBuilder diagMsg = new StringBuilder();
-
+    List<QueueCapacityModeKernel.ModeUse> modeUses = new ArrayList<>();
     for (CSQueue queue : queues) {
       for (String nodeLabel : queueCapacities.getExistingNodeLabels()) {
-        if (LegacyQueueModeProbes.isPercentageConfigured(queue, nodeLabel,
-            queueContext.getConfigModel())) {
-          percentageIsSet = true;
-        }
-        // By default weight is set to -1, so >= 0 is enough.
-        if (LegacyQueueModeProbes.isWeightConfigured(queue, nodeLabel,
-            queueContext.getConfigModel())) {
-          weightIsSet = true;
-          diagMsg.append(
-              "{Queue=" + queue.getQueuePath() + ", label=" + nodeLabel
-                  + " uses weight mode}. ");
-        }
-        if (LegacyQueueModeProbes.isAbsoluteConfigured(queue, nodeLabel,
-            queueContext.getConfiguration())) {
-          absoluteMinResSet = true;
-          // There's a special handling: when absolute resource is configured,
-          // capacity will be calculated (and set) for UI/metrics purposes, so
-          // when asboluteMinResource is set, unset percentage
-          percentageIsSet = false;
-          diagMsg.append(
-              "{Queue=" + queue.getQueuePath() + ", label=" + nodeLabel
-                  + " uses absolute mode}. ");
-        }
-        if (percentageIsSet) {
-          diagMsg.append(
-              "{Queue=" + queue.getQueuePath() + ", label=" + nodeLabel
-                  + " uses percentage mode}. ");
-        }
+        modeUses.add(new QueueCapacityModeKernel.ModeUse(queue.getQueuePath(),
+            nodeLabel, LegacyQueueModeProbes.isPercentageConfigured(queue,
+                nodeLabel, queueContext.getConfigModel()),
+            LegacyQueueModeProbes.isWeightConfigured(queue, nodeLabel,
+                queueContext.getConfigModel()),
+            LegacyQueueModeProbes.isAbsoluteConfigured(queue, nodeLabel,
+                queueContext.getConfiguration())));
       }
     }
-    // If we have mixed capacity, weight or absolute resource (any of the two)
-    // We will throw exception
-    // Root queue is an exception here, because by default root queue returns
-    // 100 as capacity no matter what. We should look into this case in the
-    // future. To avoid impact too many code paths, we don;t check root queue's
-    // config.
-    if (queues.iterator().hasNext() &&
-        !queues.iterator().next().getQueuePath().equals(
-        CapacitySchedulerConfiguration.ROOT) &&
-        (percentageIsSet ? 1 : 0) + (weightIsSet ? 1 : 0) + (absoluteMinResSet ?
-            1 :
-            0) > 1) {
-      throw new IOException("Parent queue '" + getQueuePath()
-          + "' have children queue used mixed of "
-          + " weight mode, percentage and absolute mode, it is not allowed, please "
-          + "double check, details:" + diagMsg.toString());
-    }
-
-    if (weightIsSet || queues.isEmpty()) {
-      return QueueCapacityType.WEIGHT;
-    } else if (absoluteMinResSet) {
-      return QueueCapacityType.ABSOLUTE_RESOURCE;
-    } else {
-      return QueueCapacityType.PERCENT;
-    }
+    boolean firstIsRoot = queues.iterator().hasNext()
+        && queues.iterator().next().getQueuePath().equals(
+            CapacitySchedulerConfiguration.ROOT);
+    return QueueCapacityModeKernel.classify(getQueuePath(), modeUses,
+        firstIsRoot, queues.isEmpty());
   }
 
   public enum QueueCapacityType {

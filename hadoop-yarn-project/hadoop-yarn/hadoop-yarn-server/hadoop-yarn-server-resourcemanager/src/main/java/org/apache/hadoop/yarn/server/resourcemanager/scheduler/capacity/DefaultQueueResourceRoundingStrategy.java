@@ -39,10 +39,7 @@ public class DefaultQueueResourceRoundingStrategy implements QueueResourceRoundi
 
   @Override
   public double getRoundedResource(double resourceValue, QueueCapacityVectorEntry capacityVectorEntry) {
-    if (capacityVectorEntry.getVectorResourceType().equals(lastCapacityType)) {
-      return Math.round(resourceValue);
-    } else {
-      return Math.floor(resourceValue);
-    }
+    return QueueCapacityCalculationKernel.round(resourceValue,
+        capacityVectorEntry.getVectorResourceType().equals(lastCapacityType));
   }
 }

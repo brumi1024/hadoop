@@ -45,27 +45,17 @@ public class WeightQueueCapacityCalculator extends AbstractQueueCapacityCalculat
                                         CalculationContext context,
                                         String label) {
     String resourceName = context.getResourceName();
-    double normalizedWeight = context.getCurrentMinimumCapacityEntry(label).getResourceValue() /
-        resourceCalculationDriver.getSumWeightsByResource(label, resourceName);
-
-    double remainingResource = resourceCalculationDriver.getBatchRemainingResource(label)
-        .getValue(resourceName);
-
-    // Due to rounding loss it is better to use all remaining resources if no other resource uses
-    // weight
-    if (normalizedWeight == 1) {
-      return remainingResource;
-    }
-
-    double remainingResourceRatio = resourceCalculationDriver.getRemainingRatioOfResource(
-        label, resourceName);
-    double parentAbsoluteCapacity = resourceCalculationDriver.getParentAbsoluteMinCapacity(
-        label, resourceName);
-    double queueAbsoluteCapacity = parentAbsoluteCapacity * remainingResourceRatio
-        * normalizedWeight;
-
-    return resourceCalculationDriver.getUpdateContext()
-        .getUpdatedClusterResource(label).getResourceValue(resourceName) * queueAbsoluteCapacity;
+    long cluster = resourceCalculationDriver.getUpdateContext()
+        .getUpdatedClusterResource(label).getResourceValue(resourceName);
+    long parentMinimum = resourceCalculationDriver.getQueue()
+        .getEffectiveCapacity(label).getResourceValue(resourceName);
+    double remaining = resourceCalculationDriver
+        .getBatchRemainingResource(label).getValue(resourceName);
+    return QueueCapacityCalculationKernel.weightMinimum(cluster,
+        parentMinimum, remaining,
+        context.getCurrentMinimumCapacityEntry(label).getResourceValue(),
+        resourceCalculationDriver.getSumWeightsByResource(label,
+            resourceName));
   }
 
   @Override

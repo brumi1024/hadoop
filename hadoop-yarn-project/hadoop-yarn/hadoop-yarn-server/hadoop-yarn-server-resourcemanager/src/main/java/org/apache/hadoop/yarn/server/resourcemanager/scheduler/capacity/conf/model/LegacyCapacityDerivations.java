@@ -32,6 +32,40 @@ public final class LegacyCapacityDerivations {
   private LegacyCapacityDerivations() {
   }
 
+  /**
+   * Checks a legacy scalar getter without constructing queue state.
+   * @param capacity scalar percentage
+   * @param path queue or template path used by the getter
+   * @param label null for the non-labeled getter, otherwise the exact label
+   */
+  public static void validateCapacity(float capacity, QueuePath path,
+      String label) {
+    if (capacity < 0F || capacity > 100F) {
+      if (label == null) {
+        throw new IllegalArgumentException(
+            "Illegal capacity of " + capacity + " for queue " + path.getFullPath());
+      }
+      throw new IllegalArgumentException(
+          "Illegal capacity of " + capacity + " for node-label=" + label
+              + " in queue=" + path
+              + ", valid capacity should in range of [0, 100].");
+    }
+  }
+
+  /**
+   * Checks the legacy scalar weight bounds and absent-weight sentinel.
+   * @param weight scalar weight
+   * @param path queue or template path used by the getter
+   * @param label exact label used in the diagnostic
+   */
+  public static void validateWeight(float weight, QueuePath path, String label) {
+    if ((weight < -1e-6 && Math.abs(weight + 1) > 1e-6) || weight > 10000) {
+      throw new IllegalArgumentException(
+          "Illegal weight=" + weight + " for queue=" + path.getFullPath() + "label="
+              + label + ". Acceptable values: [0, 10000], -1 is same as not set");
+    }
+  }
+
   public static float capacity(QueuePath path,
       QueueConfigNode.CapacityValue value, float missingValue) {
     if (path.isRoot()) {

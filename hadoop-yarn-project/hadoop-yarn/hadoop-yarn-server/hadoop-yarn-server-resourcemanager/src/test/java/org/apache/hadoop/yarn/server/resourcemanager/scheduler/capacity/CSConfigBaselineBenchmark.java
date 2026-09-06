@@ -41,6 +41,8 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.Mut
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CompileResult;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.QueuePlanBenchmarkSupport;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
 
@@ -216,6 +218,9 @@ public class CSConfigBaselineBenchmark {
             return elapsed;
           });
 
+      measureCompiledPlanPhases(requestedQueues, gen, warmups, iterations,
+          originalModel, mutatedModel, facts);
+
       // Existing public refresh path, retained to anchor earlier measurements.
       measure("reinitialize", requestedQueues, gen.getQueueCount(), warmups,
           iterations, iteration -> {
@@ -310,6 +315,46 @@ public class CSConfigBaselineBenchmark {
         });
   }
 
+  private void measureCompiledPlanPhases(int requestedQueues,
+      CSConfigBenchmarkGenerator.GeneratedConfig generated, int warmups,
+      int iterations, CSConfigModel originalModel, CSConfigModel mutatedModel,
+      ClusterFacts facts) throws Exception {
+    CSConfigValidationEngine validationEngine = new CSConfigValidationEngine();
+    CompileResult originalCompiled = validationEngine.compile(originalModel,
+        facts);
+    CompileResult mutatedCompiled = validationEngine.compile(mutatedModel,
+        facts);
+    requireEligible(originalCompiled);
+    requireEligible(mutatedCompiled);
+    QueuePlanBenchmarkSupport.Session originalSession =
+        QueuePlanBenchmarkSupport.compile(originalModel, facts);
+    QueuePlanBenchmarkSupport.Session mutatedSession =
+        QueuePlanBenchmarkSupport.compile(mutatedModel, facts);
+
+    measure("plan-compile", requestedQueues, generated.getQueueCount(),
+        warmups, iterations, iteration -> {
+          long t0 = System.nanoTime();
+          QueuePlanBenchmarkSupport.Session session =
+              QueuePlanBenchmarkSupport.compile(
+                  iteration % 2 == 0 ? mutatedModel : originalModel, facts);
+          long elapsed = System.nanoTime() - t0;
+          if (session == null) {
+            throw new IllegalStateException("plan compilation returned null");
+          }
+          return elapsed;
+        });
+
+    measure("validation-rules", requestedQueues, generated.getQueueCount(),
+        warmups, iterations, iteration -> {
+          long t0 = System.nanoTime();
+          ValidationResult result = QueuePlanBenchmarkSupport.validate(
+              iteration % 2 == 0 ? mutatedSession : originalSession);
+          long elapsed = System.nanoTime() - t0;
+          requireValid(result);
+          return elapsed;
+        });
+  }
+
   private void measureLiveMaterialization(CapacityScheduler cs,
       CapacitySchedulerConfiguration configuration, int requestedQueues,
       int actualQueues, int warmups, int iterations) throws Exception {
@@ -390,6 +435,13 @@ public class CSConfigBaselineBenchmark {
     if (!result.isValid()) {
       throw new IllegalStateException("generated config was invalid: "
           + result.getIssues());
+    }
+  }
+
+  private void requireEligible(CompileResult result) {
+    if (!result.isCompiledActivationEligible()) {
+      throw new IllegalStateException("generated config was not eligible: "
+          + result.getFallbackReasons() + " issues=" + result.getIssues());
     }
   }
 

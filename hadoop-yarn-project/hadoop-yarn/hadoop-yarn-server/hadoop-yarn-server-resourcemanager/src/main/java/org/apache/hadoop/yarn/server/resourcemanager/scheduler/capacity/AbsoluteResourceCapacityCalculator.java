@@ -19,8 +19,6 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector.ResourceUnitCapacityType;
-import org.apache.hadoop.yarn.util.UnitsConversionUtil;
-
 import java.util.Map;
 
 import static org.apache.hadoop.yarn.api.records.ResourceInformation.MEMORY_URI;
@@ -39,13 +37,16 @@ public class AbsoluteResourceCapacityCalculator extends AbstractQueueCapacityCal
       ResourceCalculationDriver resourceCalculationDriver, CalculationContext context,
       String label) {
     String resourceName = context.getResourceName();
-    double normalizedRatio = resourceCalculationDriver.getNormalizedResourceRatios().getOrDefault(
-        label, ResourceVector.of(1)).getValue(resourceName);
-    double remainingResourceRatio = resourceCalculationDriver.getRemainingRatioOfResource(
-        label, resourceName);
-
-    return normalizedRatio * remainingResourceRatio * context.getCurrentMinimumCapacityEntry(
-        label).getResourceValue();
+    double normalizedRatio = resourceCalculationDriver
+        .getNormalizedResourceRatios().getOrDefault(
+            label, ResourceVector.of(1)).getValue(resourceName);
+    long parentMinimum = resourceCalculationDriver.getQueue()
+        .getEffectiveCapacity(label).getResourceValue(resourceName);
+    double remaining = resourceCalculationDriver
+        .getBatchRemainingResource(label).getValue(resourceName);
+    return QueueCapacityCalculationKernel.absoluteMinimum(parentMinimum,
+        remaining, context.getCurrentMinimumCapacityEntry(label)
+            .getResourceValue(), normalizedRatio);
   }
 
   @Override
@@ -107,28 +108,23 @@ public class AbsoluteResourceCapacityCalculator extends AbstractQueueCapacityCal
         if (childrenConfiguredResource == 0) {
           continue;
         }
-        // Factor to scale down effective resource: When cluster has sufficient
-        // resources, effective_min_resources will be same as configured
-        // min_resources.
-        float numeratorForMinRatio = childrenConfiguredResource;
-        if (effectiveMinResource < childrenConfiguredResource) {
-          numeratorForMinRatio = queue.getQueueResourceQuotas().getEffectiveMinResource(label)
-              .getResourceValue(resourceName);
+        String unit = resourceName.equals(MEMORY_URI) ? MB_UNIT : "";
+        QueueCapacityCalculationKernel.AbsoluteNormalization normalization =
+            QueueCapacityCalculationKernel.normalizeAbsolute(
+                childrenConfiguredResource, effectiveMinResource, unit,
+                calculationDriver.getUpdateContext()
+                    .getUpdatedClusterResource(label)
+                    .getResourceInformation(resourceName).getUnits());
+        if (normalization.downscaled()) {
           calculationDriver.getUpdateContext().addUpdateWarning(BRANCH_DOWNSCALED.ofQueue(
               queue.getQueuePath()));
         }
-
-        String unit = resourceName.equals(MEMORY_URI) ? MB_UNIT : "";
-        long convertedValue = UnitsConversionUtil.convert(unit, calculationDriver.getUpdateContext()
-            .getUpdatedClusterResource(label).getResourceInformation(resourceName).getUnits(),
-            childrenConfiguredResource);
-
-        if (convertedValue != 0) {
+        if (normalization.defined()) {
           Map<String, ResourceVector> normalizedResourceRatios =
               calculationDriver.getNormalizedResourceRatios();
           normalizedResourceRatios.putIfAbsent(label, ResourceVector.newInstance());
-          normalizedResourceRatios.get(label).setValue(resourceName, numeratorForMinRatio /
-              convertedValue);
+          normalizedResourceRatios.get(label).setValue(resourceName,
+              normalization.ratio());
         }
       }
     }

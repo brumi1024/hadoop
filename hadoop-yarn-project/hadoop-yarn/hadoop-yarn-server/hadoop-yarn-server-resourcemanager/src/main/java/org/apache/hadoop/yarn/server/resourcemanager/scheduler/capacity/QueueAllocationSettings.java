@@ -16,6 +16,8 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
+import java.util.Map;
+
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
@@ -91,6 +93,18 @@ public class QueueAllocationSettings {
 
   private static long parseLong(String value) {
     return value == null ? (long) UNDEFINED : Long.parseLong(value);
+  }
+
+  /**
+   * Returns the first deterministically ordered resource whose queue value
+   * exceeds the scheduler-wide maximum, or {@code null} when all fit.
+   */
+  public static String firstResourceExceeding(Map<String, Long> queueMaximum,
+      Map<String, Long> schedulerMaximum) {
+    return queueMaximum.keySet().stream().sorted()
+        .filter(resource -> queueMaximum.get(resource)
+            > schedulerMaximum.getOrDefault(resource, 0L))
+        .findFirst().orElse(null);
   }
 
   public Resource getMinimumAllocation() {

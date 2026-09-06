@@ -17,7 +17,9 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 
@@ -71,7 +73,13 @@ public final class UserWeights {
   }
 
   public void validateForLeafQueue(float queueUserLimit, String queuePath) throws IOException {
-    for (Map.Entry<String, Float> e : data.entrySet()) {
+    validate(data, queueUserLimit, queuePath);
+  }
+
+  /** Validates an immutable compiled weight map with live diagnostic parity. */
+  public static void validate(Map<String, Float> weights,
+      float queueUserLimit, String queuePath) throws IOException {
+    for (Map.Entry<String, Float> e : weights.entrySet()) {
       String userName = e.getKey();
       float weight = e.getValue();
       if (weight < 0.0F || weight > (100.0F / queueUserLimit)) {
@@ -85,5 +93,10 @@ public final class UserWeights {
 
   public void addFrom(UserWeights addFrom) {
     data.putAll(addFrom.data);
+  }
+
+  /** Returns a defensive snapshot for compiled validation adapters. */
+  public Map<String, Float> snapshot() {
+    return Collections.unmodifiableMap(new LinkedHashMap<>(data));
   }
 }

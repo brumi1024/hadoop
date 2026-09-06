@@ -547,30 +547,10 @@ public abstract class AbstractCSQueue implements CSQueue {
       LOG.debug("capacityConfigType is '{}' for queue {}",
           capacityConfigType, getQueuePath());
 
-      CapacityConfigType localType = CapacityConfigType.NONE;
-
-      if (queueContext.getConfiguration().isLegacyQueueMode()) {
-        localType = checkConfigTypeIsAbsoluteResource(
-                getQueuePathObject(), label) ? CapacityConfigType.ABSOLUTE_RESOURCE
-                : CapacityConfigType.PERCENTAGE;
-      } else {
-        // TODO: revisit this later
-        //  AbstractCSQueue.CapacityConfigType has only None, Percentage and Absolute mode
-        final Set<QueueCapacityVector.ResourceUnitCapacityType> definedCapacityTypes =
-                getConfiguredCapacityVector(label).getDefinedCapacityTypes();
-        if (definedCapacityTypes.size() == 1) {
-          QueueCapacityVector.ResourceUnitCapacityType next = definedCapacityTypes.iterator().next();
-          if (Objects.requireNonNull(next) == PERCENTAGE) {
-            localType = CapacityConfigType.PERCENTAGE;
-          } else if (next == QueueCapacityVector.ResourceUnitCapacityType.ABSOLUTE) {
-            localType = CapacityConfigType.ABSOLUTE_RESOURCE;
-          } else if (next == WEIGHT) {
-            localType = CapacityConfigType.PERCENTAGE;
-          }
-        } else { // Mixed type
-          localType = CapacityConfigType.PERCENTAGE;
-        }
-      }
+      boolean legacy = queueContext.getConfiguration().isLegacyQueueMode();
+      CapacityConfigType localType = QueueCapacityModeKernel.constructorCapacityType(
+          legacy, legacy && checkConfigTypeIsAbsoluteResource(getQueuePathObject(), label),
+          legacy ? Set.of() : getConfiguredCapacityVector(label).getDefinedCapacityTypes());
 
       if (this.capacityConfigType.equals(CapacityConfigType.NONE)) {
         this.capacityConfigType = localType;

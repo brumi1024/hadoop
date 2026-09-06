@@ -19,12 +19,10 @@ package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validat
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.ConfigDiagnostic;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.AbsoluteParentMinCoverageRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.CapacityModeUniformityRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.CapacityVectorUpdateRule;
@@ -37,18 +35,8 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validati
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.QueueNameRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.VcoresAllocationRule;
 
-/** Side-effect-free entry point for Capacity Scheduler configuration validation. */
+/** Capacity Scheduler validation and compiled-plan entry points. */
 public final class CSConfigValidationEngine {
-  private static final Map<String, ValidationIssue.Severity> DIAGNOSTIC_SEVERITIES =
-      Map.of(
-          // Boolean parsing is deliberately lenient, unlike the other typed
-          // parsers which throw in the legacy configuration getters.
-          "invalid-boolean", ValidationIssue.Severity.WARNING,
-          "invalid-float", ValidationIssue.Severity.ERROR,
-          "invalid-integer", ValidationIssue.Severity.ERROR,
-          "invalid-capacity", ValidationIssue.Severity.ERROR,
-          "invalid-queue-state", ValidationIssue.Severity.ERROR,
-          "deprecated-key", ValidationIssue.Severity.WARNING);
   private final List<ValidationRule> rules;
 
   public CSConfigValidationEngine() {
@@ -68,13 +56,8 @@ public final class CSConfigValidationEngine {
       ClusterFacts facts) {
     ValidationContext context = new ValidationContext(proposed, facts);
     List<ValidationIssue> issues = new ArrayList<>();
-    for (ConfigDiagnostic diagnostic : proposed.getDiagnostics()) {
-      ValidationIssue.Severity severity = DIAGNOSTIC_SEVERITIES.getOrDefault(
-          diagnostic.getCode(), ValidationIssue.Severity.ERROR);
-      issues.add(new ValidationIssue(diagnostic.getQueuePath(),
-          diagnostic.getPropertyKey(), diagnostic.getCode(), severity,
-          diagnostic.getMessage()));
-    }
+    proposed.getDiagnostics().stream().map(ValidationDiagnosticSupport::issue)
+        .forEach(issues::add);
     runStage(ValidationRule.Stage.MODEL, context, issues);
     if (issues.stream().noneMatch(issue ->
         issue.getSeverity() == ValidationIssue.Severity.ERROR)) {
@@ -85,6 +68,42 @@ public final class CSConfigValidationEngine {
       runStage(ValidationRule.Stage.HIERARCHY, context, issues);
     }
     return new ValidationResult(issues);
+  }
+
+  /**
+   * Compiles and validates an immutable plan when every validation dependency
+   * is represented by pure built-in logic.
+   *
+   * <p>An ineligible result contains deterministic fallback reasons and no
+   * plan. An invalid result contains structured issues and no plan. Therefore
+   * every plan returned by this method has already passed plan-only
+   * validation against the captured facts.</p>
+   *
+   * @param proposed immutable candidate configuration model
+   * @param facts relevant runtime facts captured for the same candidate
+   * @return validated plan or an explicit fail-closed result
+   */
+  public CompileResult compile(CSConfigModel proposed, ClusterFacts facts) {
+    CSConfigCompatibilityClassifier.Classification classification =
+        new CSConfigCompatibilityClassifier().classify(proposed, facts);
+    if (!classification.isEligible()) {
+      return new CompileResult(null, List.of(), classification.reasons());
+    }
+    try {
+      ValidatedQueuePlan candidate = QueuePlanCompiler.compile(proposed, facts);
+      ValidationResult validation = new CompiledQueuePlanValidator()
+          .validate(candidate);
+      ValidatedQueuePlan validated = validation.isValid() ? candidate : null;
+      return new CompileResult(validated, validation.getIssues(), List.of());
+    } catch (RuntimeException unmodeled) {
+      String message = unmodeled.getMessage() == null
+          ? unmodeled.getClass().getSimpleName() : unmodeled.getMessage();
+      LegacyFallbackReason reason = new LegacyFallbackReason(
+          LegacyFallbackReason.Code.UNMODELED_VALIDATION_DEPENDENCY, null,
+          null, unmodeled.getClass().getName(),
+          "Compiled validation could not represent candidate: " + message);
+      return new CompileResult(null, List.of(), List.of(reason));
+    }
   }
 
   private void buildHierarchy(ValidationContext context,

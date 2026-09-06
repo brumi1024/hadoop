@@ -34,6 +34,43 @@ public final class QueueStateHelper {
 
   private QueueStateHelper() {}
 
+  /** Immutable result of initial queue-state resolution. */
+  public record InitialState(QueueState state) {
+  }
+
+  /**
+   * Resolves and validates the initial state without touching a queue.
+   * @param queuePath child queue path used in stable diagnostics
+   * @param parentPath parent queue path used in stable diagnostics
+   * @param configuredState candidate state, or null when inherited
+   * @param parentState resolved parent state, or null for root
+   * @return immutable resolved initial state
+   */
+  public static InitialState resolveInitialState(String queuePath,
+      String parentPath, QueueState configuredState, QueueState parentState) {
+    if (configuredState != null
+        && !VALID_STATE_CONFIGURATIONS.contains(configuredState)) {
+      throw new IllegalArgumentException("Invalid queue state configuration."
+          + " We can only use RUNNING or STOPPED.");
+    }
+    QueueState currentState = configuredState == null
+        ? DEFAULT_STATE : configuredState;
+    if (parentState != null) {
+      if (configuredState == QueueState.RUNNING
+          && parentState != QueueState.RUNNING) {
+        throw new IllegalArgumentException(
+            "The parent queue:" + parentPath
+                + " cannot be STOPPED as the child queue:" + queuePath
+                + " is in RUNNING state.");
+      }
+      if (configuredState == null) {
+        currentState = parentState == QueueState.DRAINING
+            ? QueueState.STOPPED : parentState;
+      }
+    }
+    return new InitialState(currentState);
+  }
+
   /**
    * Sets the current state of the queue based on its previous state, its parent's state and its
    * configured state.
@@ -77,21 +114,10 @@ public final class QueueStateHelper {
 
   private static void initializeState(
       AbstractCSQueue queue, QueueState configuredState, QueueState parentState) {
-    QueueState currentState = configuredState == null ? DEFAULT_STATE : configuredState;
-
-    if (parentState != null) {
-      if (configuredState == QueueState.RUNNING && parentState != QueueState.RUNNING) {
-        throw new IllegalArgumentException(
-            "The parent queue:" + queue.getParent().getQueuePath()
-                + " cannot be STOPPED as the child queue:" + queue.getQueuePath()
-                + " is in RUNNING state.");
-      }
-
-      if (configuredState == null) {
-        currentState = parentState == QueueState.DRAINING ? QueueState.STOPPED : parentState;
-      }
-    }
-
-    queue.updateQueueState(currentState);
+    String parentPath = queue.getParent() == null
+        ? null : queue.getParent().getQueuePath();
+    InitialState resolved = resolveInitialState(queue.getQueuePath(),
+        parentPath, configuredState, parentState);
+    queue.updateQueueState(resolved.state());
   }
 }

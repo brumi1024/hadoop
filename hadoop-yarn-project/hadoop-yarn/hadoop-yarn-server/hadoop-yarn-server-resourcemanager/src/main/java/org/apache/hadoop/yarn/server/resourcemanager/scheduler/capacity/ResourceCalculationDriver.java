@@ -28,8 +28,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.apache.hadoop.yarn.api.records.ResourceInformation.MEMORY_URI;
-
 /**
  * Drives the main logic of resource calculation for all children under a queue. Acts as a
  * bookkeeper of disposable update information that is used by all children under the common parent.
@@ -278,56 +276,44 @@ public class ResourceCalculationDriver {
 
   private Pair<Double, Double> validateCalculatedResources(CalculationContext context,
       String label, Pair<Double, Double> calculatedResources) {
-    double minimumResource = calculatedResources.getLeft();
     long minimumMemoryResource =
         context.getQueue().getQueueResourceQuotas().getEffectiveMinResource(label).getMemorySize();
-
     double remainingResourceUnderParent = overallRemainingResourcePerLabel.get(label).getValue(
         context.getResourceName());
-
     long parentMaximumResource = queue.getEffectiveMaxCapacity(label).getResourceValue(
         context.getResourceName());
-    double maximumResource = calculatedResources.getRight();
-
-    // Memory is the primary resource, if its zero, all other resource units are zero as well.
-    if (!context.getResourceName().equals(MEMORY_URI) && minimumMemoryResource == 0) {
-      minimumResource = 0;
-    }
-
-    if (maximumResource != 0 && maximumResource > parentMaximumResource) {
-      updateContext.addUpdateWarning(QueueUpdateWarningType.QUEUE_MAX_RESOURCE_EXCEEDS_PARENT
-          .ofQueue(context.getQueue().getQueuePath()));
-    }
-    maximumResource = maximumResource == 0 ? parentMaximumResource : Math.min(maximumResource,
-        parentMaximumResource);
-
-    if (maximumResource < minimumResource) {
-      updateContext.addUpdateWarning(QueueUpdateWarningType.QUEUE_EXCEEDS_MAX_RESOURCE.ofQueue(
-          context.getQueue().getQueuePath()));
-      minimumResource = maximumResource;
-    }
-
-    if (minimumResource > remainingResourceUnderParent) {
-      // Legacy auto queues are assigned a zero resource if not enough resource is left
-      if (queue instanceof ManagedParentQueue) {
-        minimumResource = 0;
-      } else {
-        updateContext.addUpdateWarning(
-            QueueUpdateWarningType.QUEUE_OVERUTILIZED.ofQueue(
-                context.getQueue().getQueuePath()).withInfo(
-                    "Resource name: " + context.getResourceName() +
-                        " resource value: " + minimumResource));
-        minimumResource = remainingResourceUnderParent;
+    QueueCapacityCalculationKernel.CalculatedResourceResult result =
+        QueueCapacityCalculationKernel.validateCalculatedResources(
+            new QueueCapacityCalculationKernel.CalculatedResourceInput(
+                context.getResourceName(), calculatedResources.getLeft(),
+                minimumMemoryResource, calculatedResources.getRight(),
+                parentMaximumResource, remainingResourceUnderParent,
+                queue instanceof ManagedParentQueue));
+    for (QueueCapacityCalculationKernel.DecisionWarning warning
+        : result.warnings()) {
+      QueueUpdateWarning updateWarning = switch (warning.kind()) {
+      case QUEUE_MAX_RESOURCE_EXCEEDS_PARENT ->
+          QueueUpdateWarningType.QUEUE_MAX_RESOURCE_EXCEEDS_PARENT.ofQueue(
+              context.getQueue().getQueuePath());
+      case QUEUE_EXCEEDS_MAX_RESOURCE ->
+          QueueUpdateWarningType.QUEUE_EXCEEDS_MAX_RESOURCE.ofQueue(
+              context.getQueue().getQueuePath());
+      case QUEUE_OVERUTILIZED ->
+          QueueUpdateWarningType.QUEUE_OVERUTILIZED.ofQueue(
+              context.getQueue().getQueuePath());
+      case QUEUE_ZERO_RESOURCE ->
+          QueueUpdateWarningType.QUEUE_ZERO_RESOURCE.ofQueue(
+              context.getQueue().getQueuePath());
+      default -> throw new IllegalStateException(
+          "Unexpected calculated-resource warning " + warning.kind());
+      };
+      if (!warning.info().isEmpty()) {
+        updateWarning = updateWarning.withInfo(warning.info());
       }
+      updateContext.addUpdateWarning(updateWarning);
     }
-
-    if (minimumResource == 0) {
-      updateContext.addUpdateWarning(QueueUpdateWarningType.QUEUE_ZERO_RESOURCE.ofQueue(
-          context.getQueue().getQueuePath())
-          .withInfo("Resource name: " + context.getResourceName()));
-    }
-
-    return new ImmutablePair<>(minimumResource, maximumResource);
+    return new ImmutablePair<>(result.minimumResource(),
+        result.maximumResource());
   }
 
   private void validateRemainingResource() {
