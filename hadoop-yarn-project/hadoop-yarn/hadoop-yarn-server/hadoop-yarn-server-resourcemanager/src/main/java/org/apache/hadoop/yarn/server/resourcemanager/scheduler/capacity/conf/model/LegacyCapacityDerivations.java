@@ -19,13 +19,16 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model;
 
 import java.util.Set;
+import java.util.regex.Matcher;
 
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector.ResourceUnitCapacityType;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.util.resource.ResourceUtils;
+import org.apache.hadoop.yarn.util.UnitsConversionUtil;
 
 /** Derives the legacy scalar view from a canonical capacity value. */
 public final class LegacyCapacityDerivations {
@@ -124,5 +127,52 @@ public final class LegacyCapacityDerivations {
       }
     }
     return resource;
+  }
+
+  /**
+   * Preserves the legacy raw root quota contract, independently of its fixed
+   * percentage scheduling vector. This is a live compatibility adapter only.
+   */
+  public static Resource rootAbsoluteResource(QueueConfigNode.CapacityValue value,
+      Set<String> resourceTypes) {
+    Resource resource = Resource.newInstance(0, 0);
+    if (value == null || value.getRawValue() == null) {
+      return resource;
+    }
+    Matcher matcher = CapacitySchedulerConfiguration.RESOURCE_PATTERN.matcher(
+        value.getRawValue());
+    if (matcher.find()) {
+      String group = matcher.group(0);
+      for (String pair : group.substring(1, group.length() - 1).trim().split(",")) {
+        String[] parts = pair.split("=");
+        if (parts.length > 1) {
+          updateRootResource(resource, resourceTypes, parts[0].trim(), parts[1]);
+        }
+      }
+    }
+    // The legacy root resource getter treats a zero-memory vector as absent.
+    return resource.getMemorySize() == 0 ? Resource.newInstance(0, 0) : resource;
+  }
+
+  private static void updateRootResource(Resource resource, Set<String> resourceTypes,
+      String name, String raw) {
+    if (!resourceTypes.contains(name) && !ResourceUtils.getResourceTypes().containsKey(name)) {
+      return;
+    }
+    String units = CapacitySchedulerConfiguration.getUnits(raw);
+    if (!UnitsConversionUtil.KNOWN_UNITS.contains(units)) {
+      return;
+    }
+    long amount = Long.parseLong(raw.substring(0, raw.length() - units.length()));
+    if (!units.isEmpty()) {
+      amount = UnitsConversionUtil.convert(units, "Mi", amount);
+    }
+    if (resourceTypes.contains(name) && "memory".equals(name)) {
+      resource.setMemorySize(amount);
+    } else if (resourceTypes.contains(name) && "vcores".equals(name)) {
+      resource.setVirtualCores((int) amount);
+    } else {
+      resource.setResourceInformation(name, ResourceInformation.newInstance(name, units, amount));
+    }
   }
 }

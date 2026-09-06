@@ -559,12 +559,14 @@ public class TestCSConfigValidationEngine {
     CapacitySchedulerConfiguration conf = conf();
     QueuePath b = new QueuePath("root.b");
     conf.setQueues(ROOT, new String[] {"a", "b"});
-    conf.setCapacity(A, "[memory=80,vcores=8]");
-    conf.setCapacity(b, "[memory=80,vcores=8]");
+    conf.setCapacity(A, "[memory=40,vcores=4]");
+    conf.setCapacity(b, "[memory=40,vcores=4]");
     conf.setAccessibleNodeLabels(ROOT, Set.of("GPU"));
     conf.setAccessibleNodeLabels(A, Set.of("GPU"));
     conf.setAccessibleNodeLabels(b, Set.of("GPU"));
-    conf.setCapacityByLabel(ROOT, "GPU", "[memory=100,vcores=10]");
+    // Configured quotas cover the children; the smaller live partition below
+    // still requires downscaling without making the hierarchy invalid.
+    conf.setCapacityByLabel(ROOT, "GPU", "[memory=160,vcores=16]");
     conf.setCapacityByLabel(A, "GPU", "[memory=80,vcores=8]");
     conf.setCapacityByLabel(b, "GPU", "[memory=80,vcores=8]");
     Resource cluster = Resource.newInstance(100, 10);

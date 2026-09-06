@@ -248,11 +248,19 @@ public final class ValidatedQueuePlan {
   }
 
   /** Existing queue facts required by transition and compatibility checks. */
+  @SuppressWarnings("checkstyle:ParameterNumber")
   public record OldQueueSnapshot(OldQueueKind kind, QueueState state,
-      boolean dynamic, boolean autoCreatedLeaf) {
+      boolean dynamic, boolean autoCreatedLeaf,
+      ResourceValues maximumAllocation, String orderingPolicyClass,
+      String constructorCapacityType, boolean allowZeroCapacitySum,
+      Set<String> configuredNodeLabels) {
     public OldQueueSnapshot {
       Objects.requireNonNull(kind);
       Objects.requireNonNull(state);
+      Objects.requireNonNull(maximumAllocation);
+      Objects.requireNonNull(orderingPolicyClass);
+      Objects.requireNonNull(constructorCapacityType);
+      configuredNodeLabels = immutableSet(configuredNodeLabels);
     }
   }
 
@@ -264,7 +272,8 @@ public final class ValidatedQueuePlan {
       Map<String, OldQueueSnapshot> oldHierarchy,
       boolean hierarchyValidationSkipped,
       CalculatorSemantics calculatorSemantics,
-      List<String> resourceNames, Map<String, String> resourceUnits) {
+      List<String> resourceNames, Map<String, String> resourceUnits,
+      String previousConfigurationFingerprint) {
     public FactsSnapshot {
       Objects.requireNonNull(clusterResource);
       Objects.requireNonNull(minimumAllocation);
@@ -275,6 +284,7 @@ public final class ValidatedQueuePlan {
       Objects.requireNonNull(calculatorSemantics);
       resourceNames = List.copyOf(resourceNames);
       resourceUnits = immutableMap(resourceUnits);
+      Objects.requireNonNull(previousConfigurationFingerprint);
     }
   }
 

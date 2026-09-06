@@ -139,10 +139,17 @@ final class QueuePlanCompiler {
           OldQueueSnapshot queue = entry.getValue();
           update(digest, "old:" + entry.getKey(), queue.kind().name()
               + ":" + queue.state() + ":" + queue.dynamic()
-              + ":" + queue.autoCreatedLeaf());
+              + ":" + queue.autoCreatedLeaf() + ":" + queue.orderingPolicyClass()
+              + ":" + queue.constructorCapacityType() + ":" + queue.allowZeroCapacitySum());
+          updateResources(digest, "oldMaximum:" + entry.getKey(),
+              queue.maximumAllocation());
+          queue.configuredNodeLabels().stream().sorted().forEach(label ->
+              update(digest, "oldLabel:" + entry.getKey(), label));
         });
     update(digest, "skipHierarchy",
         Boolean.toString(facts.hierarchyValidationSkipped()));
+    update(digest, "previousConfiguration",
+        facts.previousConfigurationFingerprint());
     return hex(digest.digest());
   }
 
@@ -700,7 +707,7 @@ final class QueuePlanCompiler {
     return QueueKind.LEAF;
   }
 
-  private FactsSnapshot normalizeFacts(ClusterFacts sourceFacts) {
+  static FactsSnapshot normalizeFacts(ClusterFacts sourceFacts) {
     Map<String, ResourceValues> resourcesByLabel = new LinkedHashMap<>();
     sourceFacts.getResourceValuesByLabel().entrySet().stream()
         .sorted(Map.Entry.comparingByKey()).forEach(entry ->
@@ -728,10 +735,11 @@ final class QueuePlanCompiler {
         sourceFacts.getNodeLabels(),
         resourcesByLabel, oldHierarchy,
         sourceFacts.isHierarchyValidationSkipped(), calculator, RESOURCE_NAMES,
-        resourceUnits);
+        resourceUnits, sourceFacts.getPreviousModel() == null ? ""
+            : candidateFingerprint(sourceFacts.getPreviousModel()));
   }
 
-  private OldQueueSnapshot oldQueue(ClusterFacts.OldQueue old) {
+  private static OldQueueSnapshot oldQueue(ClusterFacts.OldQueue old) {
     OldQueueKind kind = switch (old.getKind()) {
     case LEAF -> OldQueueKind.LEAF;
     case PARENT -> OldQueueKind.PARENT;
@@ -742,7 +750,9 @@ final class QueuePlanCompiler {
     QueueState state = old.getState() == null
         ? QueueState.RUNNING : old.getState();
     return new OldQueueSnapshot(kind, state, old.isDynamic(),
-        old.isAutoCreatedLeaf());
+        old.isAutoCreatedLeaf(), new ResourceValues(old.getMaximumAllocation()),
+        old.getOrderingPolicyClass(), old.getConstructorCapacityType(),
+        old.getAllowZeroCapacitySum(), old.getConfiguredNodeLabels());
   }
 
   private long configuredInt(String key, long fallback) {

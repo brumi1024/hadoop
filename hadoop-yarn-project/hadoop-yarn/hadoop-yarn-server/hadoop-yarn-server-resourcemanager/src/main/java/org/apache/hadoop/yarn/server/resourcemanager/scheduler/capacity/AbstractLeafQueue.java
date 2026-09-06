@@ -562,7 +562,7 @@ public class AbstractLeafQueue extends AbstractCSQueue {
       Resource oldMax = getMaximumAllocation();
       Resource newMax = newlyParsedLeafQueue.getMaximumAllocation();
 
-      if (!Resources.fitsIn(oldMax, newMax)) {
+      if (!isConfigurationRollback() && !Resources.fitsIn(oldMax, newMax)) {
         throw new IOException("Trying to reinitialize " + getQueuePath()
             + " the maximum allocation size can not be decreased!"
             + " Current setting: " + oldMax + ", trying to set it to: "
@@ -826,6 +826,9 @@ public class AbstractLeafQueue extends AbstractCSQueue {
   protected void activateApplications() {
     writeLock.lock();
     try {
+      if (isConfigurationApplyInProgress()) {
+        return;
+      }
       // limit of allowed resource usage for application masters
       Map<String, Resource> userAmPartitionLimit =
           new HashMap<String, Resource>();

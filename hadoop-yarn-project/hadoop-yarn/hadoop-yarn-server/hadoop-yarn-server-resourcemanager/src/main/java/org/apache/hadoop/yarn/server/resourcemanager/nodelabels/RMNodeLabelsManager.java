@@ -30,6 +30,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Callable;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
@@ -61,6 +62,23 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
       new ConcurrentHashMap<String, Queue>();
   private YarnAuthorizationProvider authorizer;
   private RMContext rmContext = null;
+
+  /**
+   * Keeps label mutation stable during a scheduler configuration transaction.
+   * Callers acquire provider and scheduler locks before entering this scope.
+   * Label readers deliberately do not acquire this monitor: a container
+   * completion holding a queue lock must remain able to read label resources.
+   * The label read/write lock is never held across the callback.
+   *
+   * @param operation operation using the stable label snapshot
+   * @param <T> operation result type
+   * @return operation result
+   * @throws Exception when the operation fails
+   */
+  public synchronized <T> T runWithStableNodeLabels(Callable<T> operation)
+      throws Exception {
+    return operation.call();
+  }
   
   @Override
   protected void serviceInit(Configuration conf) throws Exception {
@@ -69,7 +87,8 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
   }
 
   @Override
-  public void addLabelsToNode(Map<NodeId, Set<String>> addedLabelsToNode)
+  public synchronized void addLabelsToNode(
+      Map<NodeId, Set<String>> addedLabelsToNode)
       throws IOException {
     writeLock.lock();
     try {
@@ -109,7 +128,8 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
   }
 
   @Override
-  public void removeFromClusterNodeLabels(Collection<String> labelsToRemove)
+  public synchronized void removeFromClusterNodeLabels(
+      Collection<String> labelsToRemove)
       throws IOException {
     writeLock.lock();
     try {
@@ -134,7 +154,7 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
   }
 
   @Override
-  public void addToCluserNodeLabels(Collection<NodeLabel> labels)
+  public synchronized void addToCluserNodeLabels(Collection<NodeLabel> labels)
       throws IOException {
     writeLock.lock();
     try {
@@ -145,7 +165,7 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
   }
 
   @Override
-  public void
+  public synchronized void
       removeLabelsFromNode(Map<NodeId, Set<String>> removeLabelsFromNode)
           throws IOException {
     writeLock.lock();
@@ -167,7 +187,8 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
   }
 
   @Override
-  public void replaceLabelsOnNode(Map<NodeId, Set<String>> replaceLabelsToNode)
+  public synchronized void replaceLabelsOnNode(
+      Map<NodeId, Set<String>> replaceLabelsToNode)
       throws IOException {
     writeLock.lock();
     try {
@@ -226,7 +247,7 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
    * Following methods are used for setting if a node is up and running, and it
    * will update running nodes resource
    */
-  public void activateNode(NodeId nodeId, Resource resource) {
+  public synchronized void activateNode(NodeId nodeId, Resource resource) {
     writeLock.lock();
     try {
       // save if we have a node before
@@ -242,7 +263,7 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
       }
 
       Node nm = getNMInNodeSet(nodeId);
-      nm.resource = resource;
+      nm.resource = Resources.clone(resource);
       nm.running = true;
 
       // Add node in labelsCollection
@@ -268,7 +289,7 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
   /*
    * Following methods are used for setting if a node unregistered to RM
    */
-  public void deactivateNode(NodeId nodeId) {
+  public synchronized void deactivateNode(NodeId nodeId) {
     writeLock.lock();
     try {
       // save if we have a node before
@@ -303,12 +324,13 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
     }
   }
 
-  public void updateNodeResource(NodeId node, Resource newResource) {
+  public synchronized void updateNodeResource(NodeId node, Resource newResource) {
     deactivateNode(node);
     activateNode(node, newResource);
   }
 
-  public void reinitializeQueueLabels(Map<String, Set<String>> queueToLabels) {
+  public synchronized void reinitializeQueueLabels(
+      Map<String, Set<String>> queueToLabels) {
     writeLock.lock();
     try {
       // clear before set

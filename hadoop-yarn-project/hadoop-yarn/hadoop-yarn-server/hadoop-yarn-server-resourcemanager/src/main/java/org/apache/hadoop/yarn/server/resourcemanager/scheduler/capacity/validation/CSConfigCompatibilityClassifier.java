@@ -48,6 +48,8 @@ import static org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.A
  * configure, initialize, or otherwise execute a configured extension.</p>
  */
 final class CSConfigCompatibilityClassifier {
+  private static final String BUILTIN_SCHEDULER =
+      "org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler";
   private static final String DEFAULT_MANAGEMENT_POLICY =
       "org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity."
           + "queuemanagement.GuaranteedOrZeroCapacityOverTimePolicy";
@@ -56,6 +58,10 @@ final class CSConfigCompatibilityClassifier {
           + "ResourceUsageMultiNodeLookupPolicy";
   private static final String DEFAULT_AUTHORIZER =
       "org.apache.hadoop.yarn.security.ConfiguredYarnAuthorizer";
+  private static final Set<String> RUNTIME_GROUP_MAPPINGS = Set.of(
+      "org.apache.hadoop.security.JniBasedUnixGroupsMappingWithFallback",
+      "org.apache.hadoop.security.JniBasedUnixGroupsMapping",
+      "org.apache.hadoop.security.ShellBasedUnixGroupsMapping");
 
   private static final Set<String> APPLICATION_POLICY_ALIASES = Set.of(
       CapacitySchedulerConfiguration.FIFO_APP_ORDERING_POLICY,
@@ -351,15 +357,74 @@ final class CSConfigCompatibilityClassifier {
         && !node.isAutoQueueCreationV2Enabled();
   }
 
-  private void checkQueues(CSConfigModel model, ClusterFacts facts,
+  private void checkInstalledExtensions(CSConfigModel model, ClusterFacts facts,
       List<LegacyFallbackReason> reasons) {
     Map<String, String> raw = model.getRawProperties();
+    String configuredScheduler = raw.get(YarnConfiguration.RM_SCHEDULER);
+    if (!BUILTIN_SCHEDULER.equals(facts.getSchedulerClass())
+        || configuredScheduler != null
+        && !BUILTIN_SCHEDULER.equals(configuredScheduler.trim())) {
+      add(reasons, LegacyFallbackReason.Code.CUSTOM_SCHEDULER, null,
+          YarnConfiguration.RM_SCHEDULER, configuredScheduler == null
+              ? facts.getSchedulerClass() : configuredScheduler,
+          "Custom scheduler initialization requires legacy activation");
+    }
+    if (!YarnConfiguration.DEFAULT_IPC_RECORD_FACTORY_CLASS
+        .equals(facts.getDefaultRecordFactoryClass())) {
+      add(reasons, LegacyFallbackReason.Code.CUSTOM_RECORD_FACTORY, null,
+          YarnConfiguration.IPC_RECORD_FACTORY_CLASS,
+          facts.getDefaultRecordFactoryClass(),
+          "Default factory lookup requires legacy activation");
+    }
+    if (!"org.apache.hadoop.yarn.factories.impl.pb.RecordFactoryPBImpl"
+        .equals(facts.getRecordFactoryClass())) {
+      add(reasons, LegacyFallbackReason.Code.CUSTOM_RECORD_FACTORY, null,
+          YarnConfiguration.IPC_RECORD_FACTORY_CLASS,
+          facts.getRecordFactoryClass(),
+          "Installed record factory requires legacy activation");
+    }
+    if (!DEFAULT_AUTHORIZER.equals(facts.getAuthorizerClass())) {
+      add(reasons, LegacyFallbackReason.Code.CUSTOM_AUTHORIZATION_PROVIDER,
+          null, YarnConfiguration.YARN_AUTHORIZATION_PROVIDER,
+          facts.getAuthorizerClass(),
+          "Installed authorizer requires legacy activation");
+    }
+    if (facts.getGroupMappingClass() == null
+        || !RUNTIME_GROUP_MAPPINGS.contains(facts.getGroupMappingClass())) {
+      add(reasons, LegacyFallbackReason.Code.CUSTOM_GROUP_MAPPING, null,
+          CommonConfigurationKeysPublic.HADOOP_SECURITY_GROUP_MAPPING,
+          facts.getGroupMappingClass(),
+          "Installed group-mapping provider requires legacy activation");
+    }
+    for (ClusterFacts.PlacementPolicyDescriptor policy : facts.getPlacementPolicies()) {
+      if (!policy.implementationClass().equals(
+          "org.apache.hadoop.yarn.server.resourcemanager.placement.CSMappingPlacementRule")) {
+        add(reasons, LegacyFallbackReason.Code.CUSTOM_PLACEMENT_RULE, null,
+            YarnConfiguration.QUEUE_PLACEMENT_RULES, policy.implementationClass(),
+            "Installed placement rule requires legacy activation");
+      } else if (!policy.groupsClass().equals("org.apache.hadoop.security.Groups")
+          || policy.groupProviderClass() == null
+          || !RUNTIME_GROUP_MAPPINGS.contains(policy.groupProviderClass())) {
+        add(reasons, LegacyFallbackReason.Code.CUSTOM_GROUP_MAPPING, null,
+            CommonConfigurationKeysPublic.HADOOP_SECURITY_GROUP_MAPPING,
+            policy.groupProviderClass(),
+            "Installed placement rule retains an unsupported group-mapping service");
+      }
+    }
     facts.getOldHierarchy().entrySet().stream()
         .sorted(Comparator.comparing(entry ->
             entry.getKey().getFullPath()))
         .forEach(entry -> {
           ClusterFacts.OldQueue old = entry.getValue();
           String path = entry.getKey().getFullPath();
+          if (old.getKind() == ClusterFacts.QueueKind.LEAF
+              && !APPLICATION_POLICY_CLASSES.contains(old.getOrderingPolicyClass())) {
+            add(reasons, LegacyFallbackReason.Code.CUSTOM_APPLICATION_ORDERING_POLICY,
+                path, CapacitySchedulerConfiguration.PREFIX + path + "."
+                    + CapacitySchedulerConfiguration.ORDERING_POLICY,
+                old.getOrderingPolicyClass(),
+                "Existing application ordering policy requires legacy activation");
+          }
           if (old.getKind() == ClusterFacts.QueueKind.PLAN
               || old.getKind() == ClusterFacts.QueueKind.RESERVATION) {
             add(reasons, LegacyFallbackReason.Code.RESERVATION_EXTENSION,
@@ -372,8 +437,24 @@ final class CSConfigCompatibilityClassifier {
                 "Existing dynamic queues require live policy recomputation");
           }
         });
+  }
+
+  private void checkQueues(CSConfigModel model, ClusterFacts facts,
+      List<LegacyFallbackReason> reasons) {
+    checkInstalledExtensions(model, facts, reasons);
+    Map<String, String> raw = model.getRawProperties();
     for (QueueConfigNode node : model.getNodes().values()) {
       String path = node.getQueuePath().getFullPath();
+      if (node.getQueuePath().isRoot()) {
+        for (Map.Entry<String, String> entry : node.getRawProperties().entrySet()) {
+          if (isTemplateCapacityProperty(entry.getKey())
+              && entry.getValue().trim().startsWith("[")) {
+            add(reasons, LegacyFallbackReason.Code.UNMODELED_VALIDATION_DEPENDENCY,
+                path, fullKey(node, entry.getKey()), entry.getValue(),
+                "Configured root resource vectors require legacy quota validation");
+          }
+        }
+      }
       checkAutoCreationFlag(node,
           CapacitySchedulerConfiguration.AUTO_CREATE_CHILD_QUEUE_ENABLED,
           node.isAutoCreateChildQueueEnabled(), reasons);

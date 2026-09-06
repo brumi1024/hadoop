@@ -19,6 +19,7 @@
 package org.apache.hadoop.yarn.server.resourcemanager.placement;
 
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
@@ -48,6 +49,24 @@ public class PlacementManager {
     writeLock.lock();
     try {
       this.rules = rules;
+    } finally {
+      writeLock.unlock();
+    }
+  }
+
+  /**
+   * Prevents placement from observing a tentative queue hierarchy.
+   * Callers must first establish that installed rules cannot take scheduler
+   * locks while holding the placement read lock.
+   * @param operation queue configuration operation
+   * @param <T> operation result type
+   * @return operation result
+   * @throws Exception when the operation fails
+   */
+  public <T> T runWithStablePlacement(Callable<T> operation) throws Exception {
+    writeLock.lock();
+    try {
+      return operation.call();
     } finally {
       writeLock.unlock();
     }

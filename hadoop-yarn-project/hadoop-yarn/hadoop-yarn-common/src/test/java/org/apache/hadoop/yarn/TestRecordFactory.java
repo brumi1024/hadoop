@@ -27,11 +27,22 @@ import org.apache.hadoop.yarn.api.protocolrecords.impl.pb.AllocateResponsePBImpl
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.hadoop.yarn.factories.RecordFactory;
 import org.apache.hadoop.yarn.factories.impl.pb.RecordFactoryPBImpl;
+import org.apache.hadoop.yarn.util.Records;
+import org.apache.hadoop.yarn.factory.providers.RecordFactoryProvider;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 
 public class TestRecordFactory {
+
+  @Test
+  void testCachedFactoryDescriptor() {
+    Records.newRecord(AllocateRequest.class);
+    assertEquals(RecordFactoryPBImpl.class.getName(),
+        Records.getRecordFactoryClassName());
+    assertEquals(RecordFactoryPBImpl.class.getName(),
+        RecordFactoryProvider.getDefaultRecordFactoryClassName());
+  }
 
   @Test
   void testPbRecordFactory() {

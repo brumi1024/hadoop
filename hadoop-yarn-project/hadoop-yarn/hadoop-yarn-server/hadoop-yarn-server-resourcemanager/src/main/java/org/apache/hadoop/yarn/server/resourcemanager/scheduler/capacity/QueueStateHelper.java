@@ -78,6 +78,9 @@ public final class QueueStateHelper {
    */
   public static void setQueueState(AbstractCSQueue queue) {
     QueueState previousState = queue.getState();
+    if (previousState != null && queue.isConfigurationRollback()) {
+      return;
+    }
     QueueState configuredState = queue.getConfigNode().getState();
     QueueState parentState = (queue.getParent() == null) ? null : queue.getParent().getState();
 

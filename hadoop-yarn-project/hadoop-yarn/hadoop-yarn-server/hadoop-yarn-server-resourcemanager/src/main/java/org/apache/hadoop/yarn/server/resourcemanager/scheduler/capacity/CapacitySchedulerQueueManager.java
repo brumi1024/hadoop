@@ -36,6 +36,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.ha.HAServiceProtocol;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.yarn.api.records.Priority;
+import org.apache.hadoop.yarn.api.records.QueueState;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.security.Permission;
@@ -46,6 +47,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueStateManager
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceLimits;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerDynamicEditException;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerQueueManager;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.server.resourcemanager.security.AppPriorityACLsManager;
 
 import org.apache.hadoop.classification.VisibleForTesting;
@@ -142,6 +144,11 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
     return queues.getByFullName(name);
   }
 
+  /** Returns the installed descriptor without invoking authorizer behavior. */
+  public String getAuthorizationProviderClassName() {
+    return authorizer.getClass().getName();
+  }
+
   String normalizeQueueName(String name) {
     CSQueue queue = this.queues.get(name);
     if (queue != null) {
@@ -193,21 +200,110 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
     CSQueue newRoot = parseQueue(this.csContext.getQueueContext(), newConf, null,
         CapacitySchedulerConfiguration.ROOT, newQueues, queues, NOOP);
 
+    activateMaterializedQueues(newRoot, newQueues);
+  }
+
+  CSQueue materialize(ValidatedQueuePlan plan) throws IOException {
+    return new ValidatedQueuePlanMaterializer().materialize(plan,
+        csContext.getQueueContext(), queues);
+  }
+
+  QueueMembershipSnapshot snapshotQueueMembership() {
+    return new QueueMembershipSnapshot();
+  }
+
+  /** A transaction-local undo token; live objects never enter a queue plan. */
+  final class QueueMembershipSnapshot {
+    private final CSQueue originalRoot = root;
+    private final List<QueueMembership> memberships = new ArrayList<>();
+
+    private QueueMembershipSnapshot() {
+      for (CSQueue queue : queues.getQueues()) {
+        memberships.add(new QueueMembership(queue, queue.getParent(),
+            queue.getChildQueues() == null ? List.of()
+                : List.copyOf(queue.getChildQueues()), queue.getState()));
+      }
+    }
+
+    void restore() {
+      root = originalRoot;
+      queues.clear();
+      for (QueueMembership membership : memberships) {
+        CSQueue queue = membership.queue();
+        queues.add(queue);
+        queue.setParent(membership.parent());
+        QueueState state = membership.state();
+        // Completion may drain applications while the scheduler lock is held.
+        queue.updateQueueState(state == QueueState.DRAINING
+            && queue.getNumApplications() == 0 ? QueueState.STOPPED : state);
+        if (queue instanceof AbstractParentQueue parent) {
+          parent.restoreChildQueues(membership.children());
+        }
+      }
+    }
+  }
+
+  private record QueueMembership(CSQueue queue, CSQueue parent,
+      List<CSQueue> children, QueueState state) {
+  }
+
+  void publishQueueConfiguration(UserGroupInformation user) {
+    authorizer.setPermission(queuePermissions(appPriorityACLManager, queues),
+        user);
+    labelManager.reinitializeQueueLabels(getQueueToLabels());
+    queueStateManager.initialize(this);
+  }
+
+  void activatePendingApplications() {
+    for (CSQueue queue : queues.getQueues()) {
+      if (queue instanceof AbstractLeafQueue leaf) {
+        leaf.activateApplications();
+      }
+    }
+  }
+
+  void activateMaterializedQueues(CapacitySchedulerConfiguration newConf,
+      CSQueue newRoot) throws IOException {
+    CSQueueStore newQueues = new CSQueueStore();
+    addMaterializedQueues(newRoot, newQueues);
+    configuredNodeLabels = new ConfiguredNodeLabels(newConf);
+    activateMaterializedQueues(newRoot, newQueues);
+  }
+
+  private void addMaterializedQueues(CSQueue queue, CSQueueStore store) {
+    store.add(queue);
+    if (queue.getChildQueues() == null) {
+      return;
+    }
+    for (CSQueue child : queue.getChildQueues()) {
+      addMaterializedQueues(child, store);
+    }
+  }
+
+  private void activateMaterializedQueues(CSQueue newRoot,
+      CSQueueStore newQueues) throws IOException {
+
     // Add new queues and delete OldQeueus only after validation.
     updateQueues(queues, newQueues);
 
     // Re-configure queues
     root.reinitialize(newRoot, this.csContext.getClusterResource());
 
-    setQueueAcls(authorizer, appPriorityACLManager, queues);
+    boolean deferPublication =
+        csContext.getQueueContext().isConfigurationApplyInProgress();
+    if (!deferPublication) {
+      setQueueAcls(authorizer, appPriorityACLManager, queues);
+    }
 
     // Re-calculate headroom for active applications
     Resource clusterResource = this.csContext.getClusterResource();
     root.updateClusterResource(clusterResource, new ResourceLimits(
         clusterResource));
 
-    labelManager.reinitializeQueueLabels(getQueueToLabels());
-    this.queueStateManager.initialize(this);
+    if (!deferPublication) {
+      labelManager.reinitializeQueueLabels(getQueueToLabels());
+      this.queueStateManager.initialize(this);
+    }
   }
 
   /**
@@ -346,6 +442,12 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
   public static void setQueueAcls(YarnAuthorizationProvider authorizer,
       AppPriorityACLsManager appPriorityACLManager, CSQueueStore queues)
       throws IOException {
+    authorizer.setPermission(queuePermissions(appPriorityACLManager, queues),
+        UserGroupInformation.getCurrentUser());
+  }
+
+  private static List<Permission> queuePermissions(
+      AppPriorityACLsManager appPriorityACLManager, CSQueueStore queues) {
     List<Permission> permissions = new ArrayList<>();
     for (CSQueue queue : queues.getQueues()) {
       AbstractCSQueue csQueue = (AbstractCSQueue) queue;
@@ -361,8 +463,7 @@ public class CapacitySchedulerQueueManager implements SchedulerQueueManager<
             lQueue.getQueuePath());
       }
     }
-    authorizer.setPermission(permissions,
-        UserGroupInformation.getCurrentUser());
+    return permissions;
   }
 
   /**

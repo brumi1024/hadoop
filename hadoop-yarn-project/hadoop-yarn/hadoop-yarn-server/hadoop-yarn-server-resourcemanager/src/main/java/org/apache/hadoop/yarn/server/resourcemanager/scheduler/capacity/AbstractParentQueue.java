@@ -228,6 +228,23 @@ public abstract class AbstractParentQueue extends AbstractCSQueue {
     WEIGHT, ABSOLUTE_RESOURCE, PERCENT;
   }
 
+  /** Restores saved membership without applying candidate validation again. */
+  void restoreChildQueues(List<CSQueue> children) {
+    writeLock.lock();
+    try {
+      childQueues.clear();
+      childQueues.addAll(children);
+      queueOrderingPolicy.setQueues(childQueues);
+    } finally {
+      writeLock.unlock();
+    }
+  }
+
+  /** Returns the constructor-only zero-capacity setting for refresh checks. */
+  public boolean getAllowZeroCapacitySum() {
+    return allowZeroCapacitySum;
+  }
+
   /**
    * Set child queue and verify capacities
    * +--------------+---------------------------+-------------------------------------+------------------------+

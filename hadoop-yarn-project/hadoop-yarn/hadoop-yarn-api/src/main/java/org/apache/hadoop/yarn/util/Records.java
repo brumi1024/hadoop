@@ -18,6 +18,7 @@
 package org.apache.hadoop.yarn.util;
 
 import org.apache.hadoop.classification.InterfaceAudience.LimitedPrivate;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.yarn.factories.RecordFactory;
 import org.apache.hadoop.yarn.factory.providers.RecordFactoryProvider;
@@ -34,5 +35,14 @@ public class Records {
 
   public static <T> T newRecord(Class<T> cls) {
     return factory.newRecordInstance(cls);
+  }
+
+  /**
+   * Describes the cached factory used by live records without invoking it.
+   * @return cached record-factory class name
+   */
+  @Private
+  public static String getRecordFactoryClassName() {
+    return factory.getClass().getName();
   }
 }

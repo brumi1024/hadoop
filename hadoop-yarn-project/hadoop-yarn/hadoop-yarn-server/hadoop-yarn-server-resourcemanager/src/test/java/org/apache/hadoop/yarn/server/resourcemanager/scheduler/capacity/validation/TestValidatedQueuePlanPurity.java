@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.security.Groups;
 import org.apache.hadoop.yarn.api.protocolrecords.ResourceTypes;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
@@ -110,18 +111,18 @@ public class TestValidatedQueuePlanPurity {
   }
 
   @Test
-  public void testModelFallbackFactsResolveInheritedStates() {
+  public void testModelFallbackFactsResolveStateWithoutInitializingGroups() {
     CapacitySchedulerConfiguration conf = percentageTree();
     CapacityScheduler scheduler = Mockito.mock(CapacityScheduler.class);
+    Groups.reset();
 
     ClusterFacts facts = ClusterFacts.capture(scheduler, conf.getModel());
     CompileResult result = engine.compile(conf.getModel(), facts);
 
-    assertTrue(result.isCompiledActivationEligible(),
-        result.getFallbackReasons() + " " + result.getIssues());
-    assertNotNull(result.getPlan());
-    result.getPlan().getFacts().oldHierarchy().values().forEach(old ->
-        assertNotNull(old.state()));
+    assertTrue(result.requiresLegacyValidation());
+    org.junit.jupiter.api.Assertions.assertNull(Groups.getInitializedProviderClassName());
+    facts.getOldHierarchy().values().forEach(old ->
+        assertNotNull(old.getState()));
   }
 
   private ValidatedQueuePlan compile(CapacitySchedulerConfiguration conf,

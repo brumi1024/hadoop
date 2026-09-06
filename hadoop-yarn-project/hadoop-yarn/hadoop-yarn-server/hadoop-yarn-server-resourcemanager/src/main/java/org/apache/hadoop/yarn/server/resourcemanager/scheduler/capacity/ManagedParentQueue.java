@@ -168,9 +168,8 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
 
     QueuePath templateQueuePath = QueuePrefixes
         .getAutoCreatedQueueObjectTemplateConfPrefix(getQueuePathObject());
-    Set<String> templateConfiguredNodeLabels = queueContext
-        .getConfiguredNodeLabelsForAllQueues()
-        .getLabelsByQueue(templateQueuePath.getFullPath());
+    Set<String> templateConfiguredNodeLabels = configuration.getModel()
+        .getConfiguredNodeLabels(templateQueuePath);
     //Load template capacities
     QueueCapacities queueCapacities = new QueueCapacities(false);
     CSQueueUtils.loadCapacitiesByLabelsFromConf(templateQueuePath,
@@ -197,9 +196,8 @@ public class ManagedParentQueue extends AbstractManagedParentQueue {
       QueueResourceQuotas queueResourceQuotas) throws IOException {
     QueuePath templateQueuePath = QueuePrefixes
         .getAutoCreatedQueueObjectTemplateConfPrefix(getQueuePathObject());
-    Set<String> templateConfiguredNodeLabels = queueContext
-        .getConfiguredNodeLabelsForAllQueues()
-        .getLabelsByQueue(templateQueuePath.getFullPath());
+    Set<String> templateConfiguredNodeLabels = configuration.getModel()
+        .getConfiguredNodeLabels(templateQueuePath);
 
     for (String nodeLabel : templateConfiguredNodeLabels) {
       Resource templateMinResource = configuration.getMinimumResourceRequirement(

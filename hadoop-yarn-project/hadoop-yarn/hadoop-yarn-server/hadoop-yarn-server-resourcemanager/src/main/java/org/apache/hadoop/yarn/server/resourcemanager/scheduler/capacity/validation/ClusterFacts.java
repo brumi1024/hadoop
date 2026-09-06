@@ -18,6 +18,7 @@
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation;
 
 import java.util.Collections;
+import java.util.Collection;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -26,14 +27,21 @@ import java.util.Map;
 import java.util.Set;
 
 import org.apache.hadoop.yarn.api.records.QueueState;
+import org.apache.hadoop.security.Groups;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.apache.hadoop.yarn.factory.providers.RecordFactoryProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.placement.CSMappingPlacementRule;
+import org.apache.hadoop.yarn.server.resourcemanager.placement.PlacementRule;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.AbstractAutoCreatedLeafQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.AbstractCSQueue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.AbstractLeafQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.AbstractParentQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerContext;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueueStore;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CSQueue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.ManagedParentQueue;
@@ -44,14 +52,28 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Reservat
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.QueueConfigNode;
 import org.apache.hadoop.yarn.util.resource.DefaultResourceCalculator;
+import org.apache.hadoop.yarn.util.Records;
 import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
 import org.apache.hadoop.yarn.util.resource.Resources;
 
 /** Point-in-time runtime facts used without mutating the live scheduler. */
 public final class ClusterFacts {
+  private static final String DEFAULT_AUTHORIZER =
+      "org.apache.hadoop.yarn.security.ConfiguredYarnAuthorizer";
+  private static final String DEFAULT_ORDERING =
+      "org.apache.hadoop.yarn.server.resourcemanager.scheduler.policy.FifoOrderingPolicy";
+  private static final String DEFAULT_GROUP_MAPPING =
+      "org.apache.hadoop.security.JniBasedUnixGroupsMappingWithFallback";
+  private static final String DEFAULT_RECORD_FACTORY =
+      "org.apache.hadoop.yarn.factories.impl.pb.RecordFactoryPBImpl";
   /** Queue shape relevant to refresh transition checks. */
   public enum QueueKind {
     LEAF, PARENT, MANAGED_PARENT, PLAN, RESERVATION
+  }
+
+  /** Installed placement dependencies read without executing a rule. */
+  public record PlacementPolicyDescriptor(String implementationClass,
+      String groupsClass, String groupProviderClass) {
   }
 
   public static final class OldQueue {
@@ -59,13 +81,32 @@ public final class ClusterFacts {
     private final QueueState state;
     private final boolean dynamic;
     private final boolean autoCreatedLeaf;
+    private final Map<String, Long> maximumAllocation;
+    private final String orderingPolicyClass;
+    private final String constructorCapacityType;
+    private final boolean allowZeroCapacitySum;
+    private final Set<String> configuredNodeLabels;
 
     OldQueue(QueueKind kind, QueueState state, boolean dynamic,
         boolean autoCreatedLeaf) {
+      this(kind, state, dynamic, autoCreatedLeaf, Map.of(), DEFAULT_ORDERING,
+          "PERCENTAGE", false, Set.of(""));
+    }
+
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    OldQueue(QueueKind kind, QueueState state, boolean dynamic,
+        boolean autoCreatedLeaf, Map<String, Long> maximumAllocation,
+        String orderingPolicyClass, String constructorCapacityType,
+        boolean allowZeroCapacitySum, Set<String> configuredNodeLabels) {
       this.kind = kind;
       this.state = state;
       this.dynamic = dynamic;
       this.autoCreatedLeaf = autoCreatedLeaf;
+      this.maximumAllocation = Map.copyOf(maximumAllocation);
+      this.orderingPolicyClass = orderingPolicyClass;
+      this.constructorCapacityType = constructorCapacityType;
+      this.allowZeroCapacitySum = allowZeroCapacitySum;
+      this.configuredNodeLabels = Set.copyOf(configuredNodeLabels);
     }
 
     public QueueKind getKind() {
@@ -82,6 +123,26 @@ public final class ClusterFacts {
 
     public boolean isAutoCreatedLeaf() {
       return autoCreatedLeaf;
+    }
+
+    public Map<String, Long> getMaximumAllocation() {
+      return maximumAllocation;
+    }
+
+    public String getOrderingPolicyClass() {
+      return orderingPolicyClass;
+    }
+
+    public String getConstructorCapacityType() {
+      return constructorCapacityType;
+    }
+
+    public boolean getAllowZeroCapacitySum() {
+      return allowZeroCapacitySum;
+    }
+
+    public Set<String> getConfiguredNodeLabels() {
+      return configuredNodeLabels;
     }
   }
 
@@ -100,12 +161,36 @@ public final class ClusterFacts {
   private final Map<String, String> resourceUnits;
   private final Map<QueuePath, OldQueue> oldHierarchy;
   private final boolean hierarchyValidationSkipped;
+  private final String authorizerClass;
+  private final String groupMappingClass;
+  private final String recordFactoryClass;
+  private final String defaultRecordFactoryClass;
+  private final List<PlacementPolicyDescriptor> placementPolicies;
+  private final CSConfigModel previousModel;
+  private final String schedulerClass;
 
   private ClusterFacts(Resource clusterResource, Resource minimumAllocation,
       Resource maximumAllocation, ResourceCalculator resourceCalculator,
       Set<String> nodeLabels, Map<String, Resource> resourcesByLabel,
       Map<QueuePath, OldQueue> oldHierarchy,
       boolean hierarchyValidationSkipped) {
+    this(clusterResource, minimumAllocation, maximumAllocation,
+        resourceCalculator, nodeLabels, resourcesByLabel, oldHierarchy,
+        hierarchyValidationSkipped, DEFAULT_AUTHORIZER, DEFAULT_GROUP_MAPPING,
+        DEFAULT_RECORD_FACTORY, DEFAULT_RECORD_FACTORY, List.of(), null,
+        CapacityScheduler.class.getName());
+  }
+
+  @SuppressWarnings("checkstyle:ParameterNumber")
+  private ClusterFacts(Resource clusterResource, Resource minimumAllocation,
+      Resource maximumAllocation, ResourceCalculator resourceCalculator,
+      Set<String> nodeLabels, Map<String, Resource> resourcesByLabel,
+      Map<QueuePath, OldQueue> oldHierarchy,
+      boolean hierarchyValidationSkipped, String authorizerClass,
+      String groupMappingClass, String recordFactoryClass,
+      String defaultRecordFactoryClass,
+      List<PlacementPolicyDescriptor> placementPolicies,
+      CSConfigModel previousModel, String schedulerClass) {
     this.clusterResource = cloneOrNone(clusterResource);
     this.minimumAllocation = cloneOrNone(minimumAllocation);
     this.maximumAllocation = cloneOrNone(maximumAllocation);
@@ -133,6 +218,13 @@ public final class ClusterFacts {
     this.oldHierarchy = Collections.unmodifiableMap(
         new LinkedHashMap<>(oldHierarchy));
     this.hierarchyValidationSkipped = hierarchyValidationSkipped;
+    this.authorizerClass = authorizerClass;
+    this.groupMappingClass = groupMappingClass;
+    this.recordFactoryClass = recordFactoryClass;
+    this.defaultRecordFactoryClass = defaultRecordFactoryClass;
+    this.placementPolicies = List.copyOf(placementPolicies);
+    this.previousModel = previousModel;
+    this.schedulerClass = schedulerClass;
   }
 
   public static Builder builder() {
@@ -211,24 +303,61 @@ public final class ClusterFacts {
         Collections.emptyMap(), false);
   }
 
-  public static ClusterFacts capture(CapacityScheduler scheduler) {
+  public static ClusterFacts capture(CapacitySchedulerContext scheduler) {
+    Collection<CSQueue> queues = scheduler.getCapacitySchedulerQueueManager()
+        == null ? List.of() : scheduler.getCapacitySchedulerQueueManager()
+            .getQueues().values();
+    return capture(scheduler, queues);
+  }
+
+  /** Captures the exact existing store supplied to live materialization. */
+  public static ClusterFacts capture(CapacitySchedulerContext scheduler,
+      CSQueueStore queues) {
+    return capture(scheduler, queues.getQueues());
+  }
+
+  /**
+   * Captures materialization facts while the live context exposes a candidate.
+   * @param scheduler live scheduler inputs
+   * @param queues exact existing queue store
+   * @param previousModel immutable configuration retained for rollback
+   * @return matching runtime facts without replacing the rollback identity
+   */
+  public static ClusterFacts capture(CapacitySchedulerContext scheduler,
+      CSQueueStore queues, CSConfigModel previousModel) {
+    return capture(scheduler, queues.getQueues(), previousModel);
+  }
+
+  private static ClusterFacts capture(CapacitySchedulerContext scheduler,
+      Collection<CSQueue> queues) {
+    CapacitySchedulerConfiguration previous = scheduler.getConfiguration();
+    return capture(scheduler, queues,
+        previous == null ? null : previous.getModel());
+  }
+
+  private static ClusterFacts capture(CapacitySchedulerContext scheduler,
+      Collection<CSQueue> queues, CSConfigModel previousModel) {
     Map<QueuePath, OldQueue> hierarchy = new LinkedHashMap<>();
-    if (scheduler.getCapacitySchedulerQueueManager() != null) {
-      for (CSQueue queue : scheduler.getCapacitySchedulerQueueManager()
-          .getQueues().values()) {
-        QueueKind kind = queue instanceof PlanQueue
-            ? QueueKind.PLAN
-            : queue instanceof ReservationQueue
-                ? QueueKind.RESERVATION
-                : queue instanceof ManagedParentQueue
-            ? QueueKind.MANAGED_PARENT
-            : queue instanceof AbstractParentQueue
-                ? QueueKind.PARENT : QueueKind.LEAF;
-        boolean autoCreatedLeaf = queue instanceof AbstractAutoCreatedLeafQueue;
-        hierarchy.put(queue.getQueuePathObject(), new OldQueue(kind,
-            queue.getState(), ((AbstractCSQueue) queue).isDynamicQueue(),
-            autoCreatedLeaf));
-      }
+    for (CSQueue queue : queues) {
+      QueueKind kind = queue instanceof PlanQueue
+          ? QueueKind.PLAN
+          : queue instanceof ReservationQueue
+              ? QueueKind.RESERVATION
+              : queue instanceof ManagedParentQueue
+          ? QueueKind.MANAGED_PARENT
+          : queue instanceof AbstractParentQueue
+              ? QueueKind.PARENT : QueueKind.LEAF;
+      boolean autoCreatedLeaf = queue instanceof AbstractAutoCreatedLeafQueue;
+      hierarchy.put(queue.getQueuePathObject(), new OldQueue(kind,
+          queue.getState(), ((AbstractCSQueue) queue).isDynamicQueue(),
+          autoCreatedLeaf, kind == QueueKind.LEAF
+              ? resourceValues(queue.getMaximumAllocation()) : Map.of(),
+          queue instanceof AbstractLeafQueue leaf && leaf.getOrderingPolicy() != null
+              ? leaf.getOrderingPolicy().getClass().getName() : "",
+          ((AbstractCSQueue) queue).getCapacityConfigType() == null
+              ? "" : ((AbstractCSQueue) queue).getCapacityConfigType().name(),
+          queue instanceof AbstractParentQueue parent && parent.getAllowZeroCapacitySum(),
+          queue.getConfiguredNodeLabels()));
     }
     Resource clusterResource = scheduler.getClusterResource();
     Set<String> labels = new LinkedHashSet<>();
@@ -253,7 +382,36 @@ public final class ClusterFacts {
         scheduler.getMinimumResourceCapability(),
         scheduler.getMaximumResourceCapability(),
         scheduler.getResourceCalculator(), labels, resources, hierarchy,
-        skip);
+        skip, scheduler.getCapacitySchedulerQueueManager() == null
+            ? DEFAULT_AUTHORIZER : scheduler.getCapacitySchedulerQueueManager()
+                .getAuthorizationProviderClassName(),
+        Groups.getInitializedProviderClassName(),
+        Records.getRecordFactoryClassName(),
+        RecordFactoryProvider.getDefaultRecordFactoryClassName(),
+        placementPolicies(scheduler), previousModel, scheduler.getClass().getName());
+  }
+
+  private static List<PlacementPolicyDescriptor> placementPolicies(
+      CapacitySchedulerContext scheduler) {
+    if (scheduler.getRMContext() == null
+        || scheduler.getRMContext().getQueuePlacementManager() == null) {
+      return List.of();
+    }
+    List<PlacementRule> rules = scheduler.getRMContext()
+        .getQueuePlacementManager().getPlacementRules();
+    if (rules == null) {
+      return List.of();
+    }
+    List<PlacementPolicyDescriptor> descriptors = new java.util.ArrayList<>();
+    for (PlacementRule rule : rules) {
+      Groups groups = rule.getClass() == CSMappingPlacementRule.class
+          ? ((CSMappingPlacementRule) rule).getGroups() : null;
+      descriptors.add(new PlacementPolicyDescriptor(rule.getClass().getName(),
+          groups == null ? "" : groups.getClass().getName(),
+          groups != null && groups.getClass() == Groups.class
+              ? groups.getProviderClassName() : ""));
+    }
+    return descriptors;
   }
 
   /** Captures live facts, using a model when no live hierarchy is available. */
@@ -287,7 +445,18 @@ public final class ClusterFacts {
     return new ClusterFacts(live.clusterResource, live.minimumAllocation,
         live.maximumAllocation, live.resourceCalculator, live.nodeLabels,
         live.resourcesByLabel, hierarchy,
-        live.hierarchyValidationSkipped);
+        live.hierarchyValidationSkipped, live.authorizerClass,
+        live.groupMappingClass, live.recordFactoryClass,
+        live.defaultRecordFactoryClass, live.placementPolicies, currentModel,
+        live.schedulerClass);
+  }
+
+  CSConfigModel getPreviousModel() {
+    return previousModel;
+  }
+
+  String getSchedulerClass() {
+    return schedulerClass;
   }
 
   private static Resource cloneOrNone(Resource resource) {
@@ -350,6 +519,26 @@ public final class ClusterFacts {
   }
   public boolean isHierarchyValidationSkipped() {
     return hierarchyValidationSkipped;
+  }
+
+  public String getAuthorizerClass() {
+    return authorizerClass;
+  }
+
+  public List<PlacementPolicyDescriptor> getPlacementPolicies() {
+    return placementPolicies;
+  }
+
+  public String getGroupMappingClass() {
+    return groupMappingClass;
+  }
+
+  public String getRecordFactoryClass() {
+    return recordFactoryClass;
+  }
+
+  public String getDefaultRecordFactoryClass() {
+    return defaultRecordFactoryClass;
   }
 
   private static Map<String, Resource> immutableResourceMap(

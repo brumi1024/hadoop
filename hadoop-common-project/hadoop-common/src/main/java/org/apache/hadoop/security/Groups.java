@@ -454,6 +454,25 @@ public class Groups {
   }
 
   private static Groups GROUPS = null;
+
+  /**
+   * Returns the installed provider descriptor without creating the service or
+   * invoking provider behavior. A null result means it is not initialized.
+   * @return installed group-mapping provider class name, or null
+   */
+  @Private
+  public static synchronized String getInitializedProviderClassName() {
+    return GROUPS == null ? null : GROUPS.impl.getClass().getName();
+  }
+
+  /**
+   * Returns this service's provider descriptor without invoking the provider.
+   * @return installed group-mapping provider class name
+   */
+  @Private
+  public final String getProviderClassName() {
+    return impl.getClass().getName();
+  }
   
   /**
    * Get the groups being used to map user-to-groups.

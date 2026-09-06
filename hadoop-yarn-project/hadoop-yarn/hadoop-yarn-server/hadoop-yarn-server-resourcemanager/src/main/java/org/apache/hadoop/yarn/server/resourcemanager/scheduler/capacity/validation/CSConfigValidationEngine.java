@@ -90,9 +90,21 @@ public final class CSConfigValidationEngine {
       return new CompileResult(null, List.of(), classification.reasons());
     }
     try {
+      List<LegacyFallbackReason> rollbackReasons = rollbackFallbackReasons(facts);
+      if (!rollbackReasons.isEmpty()) {
+        return new CompileResult(null, List.of(), rollbackReasons);
+      }
       ValidatedQueuePlan candidate = QueuePlanCompiler.compile(proposed, facts);
       ValidationResult validation = new CompiledQueuePlanValidator()
           .validate(candidate);
+      if (validation.isValid()) {
+        List<LegacyFallbackReason> activationReasons =
+            CompiledQueuePlanActivationValidator.fallbackReasons(candidate);
+        if (!activationReasons.isEmpty()) {
+          return new CompileResult(null, validation.getIssues(),
+              activationReasons);
+        }
+      }
       ValidatedQueuePlan validated = validation.isValid() ? candidate : null;
       return new CompileResult(validated, validation.getIssues(), List.of());
     } catch (RuntimeException unmodeled) {
@@ -104,6 +116,48 @@ public final class CSConfigValidationEngine {
           "Compiled validation could not represent candidate: " + message);
       return new CompileResult(null, List.of(), List.of(reason));
     }
+  }
+
+  private List<LegacyFallbackReason> rollbackFallbackReasons(ClusterFacts facts) {
+    CSConfigModel previous = facts.getPreviousModel();
+    if (previous == null) {
+      return List.of();
+    }
+    CSConfigCompatibilityClassifier.Classification classification =
+        new CSConfigCompatibilityClassifier().classify(previous, facts);
+    if (!classification.isEligible()) {
+      return classification.reasons();
+    }
+    // Rollback rebuilds constructors but deliberately restores actual states
+    // and bypasses maximum-allocation decrease checks on retained queues.
+    ValidationResult validation = new CompiledQueuePlanValidator().validate(
+        QueuePlanCompiler.compile(previous, facts));
+    return validation.getIssues().stream().filter(issue ->
+        issue.getSeverity() == ValidationIssue.Severity.ERROR).map(issue ->
+            new LegacyFallbackReason(
+                LegacyFallbackReason.Code.LIVE_QUEUE_REINITIALIZATION,
+                issue.getQueuePath() == null ? null : issue.getQueuePath().getFullPath(),
+                issue.getPropertyKey(), issue.getRuleId(),
+                "Previous configuration cannot be rebuilt for rollback: "
+                    + issue.getMessage())).toList();
+  }
+
+  /**
+   * Verifies a live handoff without rebuilding or revalidating the plan.
+   * @param plan validated immutable plan
+   * @param model candidate currently visible to live constructors
+   * @param facts current facts captured under the activation locks
+   * @return whether both candidate and runtime snapshot match
+   */
+  public boolean matchesInputs(ValidatedQueuePlan plan, CSConfigModel model,
+      ClusterFacts facts) {
+    return new CSConfigCompatibilityClassifier().classify(model, facts)
+        .isEligible()
+        && plan.getIdentity().candidateFingerprint().equals(
+        QueuePlanCompiler.candidateFingerprint(model))
+        && plan.getIdentity().factsFingerprint().equals(
+            QueuePlanCompiler.factsFingerprint(
+                QueuePlanCompiler.normalizeFacts(facts)));
   }
 
   private void buildHierarchy(ValidationContext context,

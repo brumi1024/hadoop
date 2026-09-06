@@ -31,6 +31,7 @@ import java.util.Map.Entry;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -124,6 +125,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.CSC
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidatedQueuePlan;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.rules.MemoryAllocationRule;
@@ -501,6 +503,139 @@ public class CapacityScheduler extends
 
   private void activateConfiguration(CapacitySchedulerConfiguration proposed,
       RMContext rmContext) throws IOException {
+    activateConfiguration(proposed, rmContext, null);
+  }
+
+  /**
+   * Freezes validation-affecting runtime inputs through compiled activation.
+   * The provider serialization lock must be acquired before this scope.
+   * Node-label readers remain independent so queue completion can progress.
+   * @param operation compilation and activation using one runtime snapshot
+   * @param <T> result type
+   * @return operation result
+   * @throws Exception when the operation fails
+   */
+  @Private
+  public <T> T runWithStableQueueConfiguration(Callable<T> operation)
+      throws Exception {
+    Preconditions.checkState(getMutableConfProvider() != null
+        && getMutableConfProvider().isMutationLockHeld(),
+        "Mutation lock must be held for compiled queue configuration");
+    writeLock.lock();
+    try {
+      synchronized (queueManager.getQueueStateManager()) {
+        return rmContext.getNodeLabelManager()
+            .runWithStableNodeLabels(operation);
+      }
+    } finally {
+      writeLock.unlock();
+    }
+  }
+
+  /**
+   * Activates the exact candidate accepted by compiled validation.
+   * @param proposed candidate configuration
+   * @param context ResourceManager context
+   * @param plan validated immutable plan bound to candidate and runtime facts
+   * @throws IOException when inputs changed or activation fails
+   */
+  @Private
+  public void reinitializeCompiledConfiguration(
+      CapacitySchedulerConfiguration proposed, RMContext context,
+      ValidatedQueuePlan plan) throws IOException {
+    Preconditions.checkNotNull(plan);
+    try {
+      applyCompiledConfiguration(proposed, context, plan, () -> null);
+    } catch (IOException | IllegalStateException e) {
+      throw e;
+    } catch (Exception e) {
+      throw new IOException("Failed to activate compiled queue plan", e);
+    }
+  }
+
+  /**
+   * Applies a plan and commits its configuration while retaining an undo token.
+   * The commit callback must have an unambiguous outcome and must not perform
+   * any fallible operation after committing its store.
+   * @param proposed exact candidate configuration
+   * @param context ResourceManager context
+   * @param plan accepted immutable plan
+   * @param commit final configuration-store commit and snapshot publication
+   * @param <T> callback result type
+   * @return committed result
+   * @throws Exception when preparation or commitment fails
+   */
+  @Private
+  public <T> T applyCompiledConfiguration(
+      CapacitySchedulerConfiguration proposed, RMContext context,
+      ValidatedQueuePlan plan, Callable<T> commit) throws Exception {
+    Preconditions.checkNotNull(plan);
+    return runWithStableQueueConfiguration(() -> {
+      requireMatchingCompiledInputs(proposed, plan);
+      UserGroupInformation publisher = UserGroupInformation.getCurrentUser();
+      return rmContext.getQueuePlacementManager().runWithStablePlacement(() -> {
+        requireMatchingCompiledInputs(proposed, plan);
+        return applyCompiledConfigurationUnderPlacement(
+            proposed, context, plan, commit, publisher);
+      });
+    });
+  }
+
+  private void requireMatchingCompiledInputs(
+      CapacitySchedulerConfiguration proposed, ValidatedQueuePlan plan)
+      throws IOException {
+    CSConfigValidationEngine engine = new CSConfigValidationEngine();
+    ClusterFacts facts = ClusterFacts.capture(this);
+    if (!engine.matchesInputs(plan, proposed.getModel(), facts)) {
+      throw new IOException("Compiled queue plan inputs changed before activation");
+    }
+  }
+
+  private <T> T applyCompiledConfigurationUnderPlacement(
+      CapacitySchedulerConfiguration proposed, RMContext context,
+      ValidatedQueuePlan plan, Callable<T> commit, UserGroupInformation publisher)
+      throws Exception {
+    CapacitySchedulerConfiguration oldConf = this.conf;
+    CapacitySchedulerQueueManager.QueueMembershipSnapshot membership =
+        queueManager.snapshotQueueMembership();
+    queueContext.beginConfigurationApply();
+    try {
+      T result;
+      try {
+        activateConfiguration(proposed, context, plan);
+        result = commit.call();
+      } catch (Throwable failure) {
+        try {
+          queueContext.beginConfigurationRollback();
+          membership.restore();
+          this.conf = oldConf;
+          activateConfiguration(oldConf, context, null);
+          membership.restore();
+          queueContext.endConfigurationApply();
+          queueManager.activatePendingApplications();
+          maxRunningEnforcer.updateRunnabilityOnReload();
+        } catch (Throwable rollbackFailure) {
+          failure.addSuppressed(rollbackFailure);
+        }
+        if (failure instanceof Exception exception) {
+          throw exception;
+        }
+        throw new IOException("Failed to activate compiled queue plan", failure);
+      }
+      // Only built-in, non-rejecting publication remains after commitment.
+      queueManager.publishQueueConfiguration(publisher);
+      preemptionManager.refreshQueues(null, getRootQueue());
+      queueContext.endConfigurationApply();
+      queueManager.activatePendingApplications();
+      maxRunningEnforcer.updateRunnabilityOnReload();
+      return result;
+    } finally {
+      queueContext.endConfigurationApply();
+    }
+  }
+
+  private void activateConfiguration(CapacitySchedulerConfiguration proposed,
+      RMContext rmContext, ValidatedQueuePlan plan) throws IOException {
     writeLock.lock();
     try {
       CapacitySchedulerConfiguration oldConf = this.conf;
@@ -508,10 +643,18 @@ public class CapacityScheduler extends
       validateConf(this.conf);
       try {
         LOG.info("Re-initializing queues...");
+        CSQueue preparedRoot = null;
+        if (plan != null) {
+          queueContext.reinitialize();
+          preparedRoot = queueManager.materialize(plan);
+        }
         refreshMaximumAllocation(
             ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
-        reinitializeQueues(this.conf);
+        reinitializeQueues(this.conf, preparedRoot);
       } catch (Throwable t) {
+        if (plan != null) {
+          throw new IOException("Failed to re-init queues : " + t.getMessage(), t);
+        }
         this.conf = oldConf;
         reinitializeQueues(this.conf);
         refreshMaximumAllocation(
@@ -535,7 +678,9 @@ public class CapacityScheduler extends
           "offswitchPerHeartbeatLimit = " + offswitchPerHeartbeatLimit);
 
       super.reinitialize(proposed, rmContext);
-      maxRunningEnforcer.updateRunnabilityOnReload();
+      if (!queueContext.isConfigurationApplyInProgress()) {
+        maxRunningEnforcer.updateRunnabilityOnReload();
+      }
     } finally {
       writeLock.unlock();
     }
@@ -876,14 +1021,25 @@ public class CapacityScheduler extends
   @Lock(CapacityScheduler.class)
   private void reinitializeQueues(CapacitySchedulerConfiguration newConf)
   throws IOException {
-    queueContext.reinitialize();
-    this.queueManager.reinitializeQueues(newConf);
+    reinitializeQueues(newConf, null);
+  }
+
+  private void reinitializeQueues(CapacitySchedulerConfiguration newConf,
+      CSQueue preparedRoot) throws IOException {
+    if (preparedRoot == null) {
+      queueContext.reinitialize();
+      queueManager.reinitializeQueues(newConf);
+    } else {
+      queueManager.activateMaterializedQueues(newConf, preparedRoot);
+    }
     updatePlacementRules();
 
     this.workflowPriorityMappingsMgr.initialize(this);
 
     // Notify Preemption Manager
-    preemptionManager.refreshQueues(null, this.getRootQueue());
+    if (!queueContext.isConfigurationApplyInProgress()) {
+      preemptionManager.refreshQueues(null, this.getRootQueue());
+    }
   }
 
   @Override

@@ -532,7 +532,22 @@ public abstract class AbstractCSQueue implements CSQueue {
   }
 
   private Resource absoluteResource(QueueConfigNode.CapacityValue value) {
-    return LegacyCapacityDerivations.absoluteResource(value, resourceTypes);
+    Resource resource = getQueuePathObject().isRoot()
+        ? LegacyCapacityDerivations.rootAbsoluteResource(value, resourceTypes)
+        : LegacyCapacityDerivations.absoluteResource(value, resourceTypes);
+    for (ResourceInformation entry : resource.getResources()) {
+      if (entry.getValue() != 0) {
+        return resource;
+      }
+    }
+    // Preserve the legacy empty-resource metadata without returning the shared
+    // sentinel: quota initialization must still receive a fresh mutable value.
+    for (ResourceInformation entry : resource.getResources()) {
+      ResourceInformation empty = Resources.none().getResourceInformation(entry.getName());
+      entry.setMinimumAllocation(empty.getMinimumAllocation());
+      entry.setMaximumAllocation(empty.getMaximumAllocation());
+    }
+    return resource;
   }
 
   protected boolean checkConfigTypeIsAbsoluteResource(QueuePath queuePath,
@@ -1138,6 +1153,14 @@ public abstract class AbstractCSQueue implements CSQueue {
   @Override
   public void updateQueueState(QueueState queueState) {
     this.state = queueState;
+  }
+
+  boolean isConfigurationRollback() {
+    return liveContext != null && liveContext.isConfigurationRollback();
+  }
+
+  boolean isConfigurationApplyInProgress() {
+    return liveContext != null && liveContext.isConfigurationApplyInProgress();
   }
 
   /**

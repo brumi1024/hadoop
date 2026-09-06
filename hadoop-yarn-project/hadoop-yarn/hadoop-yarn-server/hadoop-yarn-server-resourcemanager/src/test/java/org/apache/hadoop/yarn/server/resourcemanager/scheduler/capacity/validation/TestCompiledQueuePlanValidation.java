@@ -277,16 +277,19 @@ public class TestCompiledQueuePlanValidation {
         "u:%user:root.a.shared,g:users:root.b.shared");
     conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
         ResourceScheduler.class);
+    CapacitySchedulerConfiguration exact =
+        new CapacitySchedulerConfiguration(conf, false);
 
     QueueMetrics.clearQueueMetrics();
     try (MockRM rm = new MockRM(conf)) {
       rm.start();
       CapacityScheduler scheduler =
           (CapacityScheduler) rm.getResourceScheduler();
+      scheduler.reinitializeValidatedConfiguration(exact, rm.getRMContext());
       assertTrue(scheduler.getCapacitySchedulerQueueManager()
           .isAmbiguous("shared"));
       assertNotNull(scheduler.getCSMappingPlacementRule());
-      CompileResult result = engine.compile(conf.getModel(),
+      CompileResult result = engine.compile(exact.getModel(),
           ClusterFacts.capture(scheduler));
       assertTrue(result.isCompiledActivationEligible(),
           result.getFallbackReasons() + " " + result.getIssues());

@@ -714,6 +714,21 @@ public class TestCSConfigCompatibilityClassifier {
         result.getFallbackReasons() + " " + result.getIssues());
   }
 
+  @Test
+  public void testRootResourceVectorsRequireLegacyQuotaValidation() {
+    for (String suffix : List.of("capacity", "maximum-capacity",
+        "accessible-node-labels.x.capacity",
+        "accessible-node-labels.x.maximum-capacity")) {
+      CapacitySchedulerConfiguration conf = percentageTree();
+      String key = QueuePrefixes.getQueuePrefix(ROOT) + suffix;
+      conf.set(key, "[memory=32768,vcores=32]");
+      CompileResult result = engine.compile(conf.getModel(), ClusterFacts.empty());
+      assertFallback(result, LegacyFallbackReason.Code.UNMODELED_VALIDATION_DEPENDENCY);
+      assertTrue(result.getFallbackReasons().stream().anyMatch(reason ->
+          "root".equals(reason.queuePath()) && key.equals(reason.propertyKey())));
+    }
+  }
+
   private void assertTemplateFallback(String suffix, String value) {
     assertTemplateFallback(suffix, value,
         LegacyFallbackReason.Code.UNSUPPORTED_TEMPLATE_PROPERTY);

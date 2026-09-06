@@ -36,6 +36,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.service.Service;
@@ -66,6 +71,50 @@ import org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableMap;
 import org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableSet;
 
 public class TestRMNodeLabelsManager extends NodeLabelTestBase {
+  @Test
+  @Timeout(value = 10)
+  public void testStableSnapshotBlocksWritersButNotReaders() throws Exception {
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    CountDownLatch writerStarted = new CountDownLatch(1);
+    try {
+      Future<?> writer = mgr.runWithStableNodeLabels(() -> {
+        Future<?> pending = executor.submit(() -> {
+          writerStarted.countDown();
+          mgr.addToCluserNodeLabelsWithDefaultExclusivity(toSet("pending"));
+          return null;
+        });
+        assertTrue(writerStarted.await(2, TimeUnit.SECONDS));
+        Future<Resource> reader = executor.submit(() ->
+            mgr.getResourceByLabel(RMNodeLabelsManager.NO_LABEL, null));
+        assertThat(reader.get(2, TimeUnit.SECONDS))
+            .isEqualTo(EMPTY_RESOURCE);
+        assertFalse(pending.isDone());
+        assertFalse(
+            mgr.getClusterNodeLabelNames().contains("pending"));
+        // Publication can use the label write lock within the snapshot scope.
+        mgr.reinitializeQueueLabels(ImmutableMap.of("root", toSet("*")));
+        return pending;
+      });
+      writer.get(2, TimeUnit.SECONDS);
+      assertTrue(
+          mgr.getClusterNodeLabelNames().contains("pending"));
+    } finally {
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  public void testActivatedNodeResourceDoesNotAliasCaller() {
+    Resource supplied = Resource.newInstance(100, 1);
+    NodeId node = NodeId.newInstance("snapshot-node", 1);
+    mgr.activateNode(node, supplied);
+    supplied.setMemorySize(500);
+    mgr.deactivateNode(node);
+    assertThat(mgr.getResourceByLabel(RMNodeLabelsManager.NO_LABEL, null))
+        .isEqualTo(EMPTY_RESOURCE);
+  }
+
   private final Resource EMPTY_RESOURCE = Resource.newInstance(0, 0);
   private final Resource SMALL_RESOURCE = Resource.newInstance(100, 0);
   private final Resource LARGE_NODE = Resource.newInstance(1000, 0);

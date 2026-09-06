@@ -218,9 +218,6 @@ public class CSConfigBaselineBenchmark {
             return elapsed;
           });
 
-      measureCompiledPlanPhases(requestedQueues, gen, warmups, iterations,
-          originalModel, mutatedModel, facts);
-
       // Existing public refresh path, retained to anchor earlier measurements.
       measure("reinitialize", requestedQueues, gen.getQueueCount(), warmups,
           iterations, iteration -> {
@@ -275,6 +272,9 @@ public class CSConfigBaselineBenchmark {
             requireValid(result);
             return elapsed;
           });
+      // Preserve the foundation phase order through complete atomic apply.
+      measureCompiledPlanPhases(requestedQueues, gen, warmups, iterations,
+          originalModel, mutatedModel, ClusterFacts.capture(cs));
     } finally {
       rm.stop();
       QueueMetrics.clearQueueMetrics();

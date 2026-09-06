@@ -22,6 +22,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
 import org.apache.hadoop.classification.InterfaceAudience.LimitedPrivate;
+import org.apache.hadoop.classification.InterfaceAudience.Private;
 import org.apache.hadoop.classification.InterfaceStability.Unstable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
@@ -38,6 +39,16 @@ public class RecordFactoryProvider {
   }
   
   private RecordFactoryProvider() {
+  }
+
+  /**
+   * Returns the default descriptor without loading or initializing a factory.
+   * @return class name used by the default factory lookup
+   */
+  @Private
+  public static String getDefaultRecordFactoryClassName() {
+    return defaultConf.get(YarnConfiguration.IPC_RECORD_FACTORY_CLASS,
+        YarnConfiguration.DEFAULT_IPC_RECORD_FACTORY_CLASS);
   }
   
   public static RecordFactory getRecordFactory(Configuration conf) {

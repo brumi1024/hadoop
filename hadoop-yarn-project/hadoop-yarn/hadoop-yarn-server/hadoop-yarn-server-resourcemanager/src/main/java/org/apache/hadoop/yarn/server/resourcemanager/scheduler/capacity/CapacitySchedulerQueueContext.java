@@ -27,6 +27,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.SchedulerHealth;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.ActivitiesManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.PreemptionManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerApp;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerNode;
 import org.apache.hadoop.yarn.util.resource.ResourceCalculator;
@@ -52,6 +53,9 @@ public class CapacitySchedulerQueueContext implements QueueBuildContext {
   private CapacitySchedulerConfiguration configuration;
 
   private Resource minimumAllocation;
+  private volatile boolean configurationApplyInProgress;
+  private boolean configurationRollback;
+  private CSConfigModel configurationBeforeApply;
 
   public CapacitySchedulerQueueContext(CapacitySchedulerContext csContext) {
     this.csContext = csContext;
@@ -73,8 +77,37 @@ public class CapacitySchedulerQueueContext implements QueueBuildContext {
     this.minimumAllocation = csContext.getMinimumResourceCapability();
   }
 
+  boolean isConfigurationApplyInProgress() {
+    return configurationApplyInProgress;
+  }
+
+  boolean isConfigurationRollback() {
+    return configurationRollback;
+  }
+
+  void beginConfigurationApply() {
+    configurationBeforeApply = configuration.getModel();
+    configurationApplyInProgress = true;
+  }
+
+  void beginConfigurationRollback() {
+    configurationRollback = true;
+  }
+
+  void endConfigurationApply() {
+    configurationRollback = false;
+    configurationApplyInProgress = false;
+    configurationBeforeApply = null;
+  }
+
   public CapacitySchedulerQueueManager getQueueManager() {
     return queueManager;
+  }
+
+  ClusterFacts captureClusterFacts(CSQueueStore existingQueues) {
+    return configurationBeforeApply == null
+        ? ClusterFacts.capture(csContext, existingQueues)
+        : ClusterFacts.capture(csContext, existingQueues, configurationBeforeApply);
   }
 
   @Override
