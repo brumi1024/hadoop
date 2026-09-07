@@ -94,7 +94,7 @@ abstract class AbstractRMWebServicesConfigurationTest extends JerseyTestBase {
       }
       csConf = new CapacitySchedulerConfiguration(new Configuration(false),
           false);
-      setupQueueConfiguration(csConf);
+      configureSchedulerQueues(csConf);
       conf = new YarnConfiguration();
       conf.setClass(YarnConfiguration.RM_SCHEDULER, CapacityScheduler.class,
           ResourceScheduler.class);
@@ -137,6 +137,11 @@ abstract class AbstractRMWebServicesConfigurationTest extends JerseyTestBase {
   @BeforeEach
   public void setUp() throws Exception {
     super.setUp();
+  }
+
+  protected void configureSchedulerQueues(
+      CapacitySchedulerConfiguration config) {
+    setupQueueConfiguration(config);
   }
 
   protected static void setupQueueConfiguration(

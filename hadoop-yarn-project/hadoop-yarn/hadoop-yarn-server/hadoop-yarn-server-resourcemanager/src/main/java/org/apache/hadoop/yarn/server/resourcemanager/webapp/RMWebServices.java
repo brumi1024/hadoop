@@ -158,6 +158,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CompileResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.fica.FiCaSchedulerNode;
@@ -2839,9 +2840,16 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
         proposed instanceof CapacitySchedulerConfiguration
             ? (CapacitySchedulerConfiguration) proposed
             : new CapacitySchedulerConfiguration(proposed, false);
-    ValidationResult result = new CSConfigValidationEngine().validate(
-        capacityConfiguration.getModel(), ClusterFacts.capture(scheduler,
-            currentCapacityConfiguration.getModel()));
+    CSConfigValidationEngine engine = new CSConfigValidationEngine();
+    CompileResult compiled = scheduler.getClass() == CapacityScheduler.class
+        ? scheduler.runWithStableQueueConfiguration(() -> engine.compile(
+            capacityConfiguration.getModel(), ClusterFacts.capture(scheduler,
+                currentCapacityConfiguration.getModel()))) : null;
+    // Extension lifecycle execution stays outside the extra compiled scope.
+    ValidationResult result = compiled == null || compiled.requiresLegacyValidation()
+        ? engine.validate(capacityConfiguration.getModel(),
+            ClusterFacts.capture(scheduler, currentCapacityConfiguration.getModel()))
+        : compiled.asValidationResult();
     return new ProposedValidation(capacityConfiguration, result,
         configVersion);
   }

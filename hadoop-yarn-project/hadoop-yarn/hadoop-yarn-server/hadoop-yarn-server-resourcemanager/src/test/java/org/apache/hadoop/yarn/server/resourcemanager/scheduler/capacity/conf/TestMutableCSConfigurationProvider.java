@@ -73,8 +73,10 @@ public class TestMutableCSConfigurationProvider {
       .createUserForTesting("testUser", new String[] {});
 
   @BeforeEach
-  public void setUp() {
+  public void setUp() throws Exception {
     cs = mock(CapacityScheduler.class);
+    when(cs.runWithStableQueueConfiguration(any())).thenAnswer(invocation ->
+        ((java.util.concurrent.Callable<?>) invocation.getArgument(0)).call());
     rmContext = mock(RMContext.class);
     when(rmContext.getScheduler()).thenReturn(cs);
     when(cs.getConfiguration()).thenReturn(

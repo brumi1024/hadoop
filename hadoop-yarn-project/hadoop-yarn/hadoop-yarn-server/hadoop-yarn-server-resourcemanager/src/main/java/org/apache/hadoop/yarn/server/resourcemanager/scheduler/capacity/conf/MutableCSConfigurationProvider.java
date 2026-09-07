@@ -33,11 +33,15 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.model.CSConfigModel;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidationEngine;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CompileResult;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.LegacyFallbackReason;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.locks.ReentrantLock;
@@ -136,33 +140,102 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
           ConfigurationUpdateAssembler.constructKeyValueConfUpdate(
               proposed, confUpdate);
       applyMutation(proposed, changes);
-      CSConfigModel model = proposed.getModel();
-      ClusterFacts facts = ClusterFacts.capture(scheduler);
-      ValidationResult result = new CSConfigValidationEngine().validate(
-          model, facts);
-      if (!result.isValid()) {
-        return result;
+      CompiledMutation compiled = applyCompiledMutation(scheduler, proposed,
+          changes, user);
+      if (compiled.result() != null) {
+        return compiled.result();
       }
-
-      LogMutation log = new LogMutation(changes, user.getShortUserName());
-      confStore.logMutation(log);
-      try {
-        scheduler.reinitializePreValidated(proposed, rmContext,
-            model, facts);
-        confStore.confirmMutation(log, true);
-        current = new ConfigSnapshot(proposed, confStore.getConfigVersion());
-      } catch (Throwable failure) {
-        confStore.confirmMutation(log, false);
-        if (failure instanceof Exception) {
-          throw (Exception) failure;
-        }
-        throw new IOException("Failed to activate scheduler configuration",
-            failure);
-      }
-      return result;
+      LOG.debug("Using legacy scheduler mutation compatibility: {}",
+          compiled.fallbackReasons());
+      return applyLegacyMutation(scheduler, proposed, changes, user);
     } finally {
       mutationPipelineLock.unlock();
     }
+  }
+
+  private record CompiledMutation(ValidationResult result,
+      List<LegacyFallbackReason> fallbackReasons) {
+    private CompiledMutation {
+      fallbackReasons = List.copyOf(fallbackReasons);
+    }
+  }
+
+  private CompiledMutation applyCompiledMutation(CapacityScheduler scheduler,
+      CapacitySchedulerConfiguration proposed, Map<String, String> changes,
+      UserGroupInformation user) throws Exception {
+    List<LegacyFallbackReason> reasons = new ArrayList<>();
+    // Persistent stores do not promise failure-before-commit. Subclasses may
+    // also add fallible confirmation or version lookup, so names are not enough.
+    if (confStore.getClass() != InMemoryConfigurationStore.class) {
+      reasons.add(new LegacyFallbackReason(
+          LegacyFallbackReason.Code.STORE_COMMIT_PROTOCOL, null,
+          YarnConfiguration.SCHEDULER_CONFIGURATION_STORE_CLASS,
+          confStore.getClass().getName(),
+          "Store requires legacy commit acknowledgement"));
+    }
+    if (scheduler.getClass() != CapacityScheduler.class) {
+      reasons.add(new LegacyFallbackReason(
+          LegacyFallbackReason.Code.CUSTOM_SCHEDULER, null,
+          YarnConfiguration.RM_SCHEDULER, scheduler.getClass().getName(),
+          "Custom scheduler requires legacy activation"));
+    }
+    if (!reasons.isEmpty()) {
+      return new CompiledMutation(null, reasons);
+    }
+    return scheduler.runWithStableQueueConfiguration(() -> {
+      CompileResult compiled = new CSConfigValidationEngine().compile(
+          proposed.getModel(), ClusterFacts.capture(scheduler));
+      if (compiled.requiresLegacyValidation()) {
+        return new CompiledMutation(null, compiled.getFallbackReasons());
+      }
+      ValidationResult validation = compiled.asValidationResult();
+      CompiledMutation result = new CompiledMutation(validation, List.of());
+      if (!validation.isValid()) {
+        return result;
+      }
+      // Prepare everything before the native in-memory commit. After confirm,
+      // only non-rejecting live publication and this snapshot assignment remain.
+      ConfigSnapshot next = new ConfigSnapshot(proposed,
+          current.getStoreVersion() + 1);
+      LogMutation log = new LogMutation(changes, user.getShortUserName());
+      confStore.logMutation(log);
+      scheduler.applyCompiledConfiguration(proposed, rmContext,
+          compiled.getPlan(), () -> {
+            confStore.confirmMutation(log, true);
+            return null;
+          });
+      current = next;
+      return result;
+    });
+  }
+
+  private ValidationResult applyLegacyMutation(CapacityScheduler scheduler,
+      CapacitySchedulerConfiguration proposed, Map<String, String> changes,
+      UserGroupInformation user) throws Exception {
+    CSConfigModel model = proposed.getModel();
+    ClusterFacts facts = ClusterFacts.capture(scheduler);
+    ValidationResult result = new CSConfigValidationEngine().validate(
+        model, facts);
+    if (!result.isValid()) {
+      return result;
+    }
+
+    LogMutation log = new LogMutation(changes, user.getShortUserName());
+    confStore.logMutation(log);
+    try {
+      scheduler.reinitializePreValidated(proposed, rmContext,
+          model, facts);
+      confStore.confirmMutation(log, true);
+      current = new ConfigSnapshot(proposed, confStore.getConfigVersion());
+    } catch (Throwable failure) {
+      confStore.confirmMutation(log, false);
+      if (failure instanceof Exception) {
+        throw (Exception) failure;
+      }
+      throw new IOException("Failed to activate scheduler configuration",
+          failure);
+    }
+    return result;
   }
 
   @Override

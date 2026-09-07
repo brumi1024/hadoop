@@ -56,4 +56,16 @@ public final class CompileResult {
   public boolean requiresLegacyValidation() {
     return !fallbackReasons.isEmpty();
   }
+
+  /**
+   * Exposes the existing diagnostic contract after compatibility was decided.
+   * @return compiled validation issues in the existing result form
+   * @throws IllegalStateException when legacy validation is still required
+   */
+  public ValidationResult asValidationResult() {
+    if (requiresLegacyValidation()) {
+      throw new IllegalStateException("Legacy validation is still required");
+    }
+    return new ValidationResult(issues);
+  }
 }

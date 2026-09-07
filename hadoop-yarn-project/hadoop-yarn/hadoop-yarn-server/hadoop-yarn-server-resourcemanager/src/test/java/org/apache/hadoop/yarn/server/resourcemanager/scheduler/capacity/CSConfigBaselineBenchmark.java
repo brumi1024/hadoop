@@ -27,6 +27,7 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedConstruction;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
@@ -45,6 +46,10 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validati
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.QueuePlanBenchmarkSupport;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.when;
 
 /**
  * Phase timing harness for Capacity Scheduler configuration mutations.
@@ -261,6 +266,12 @@ public class CSConfigBaselineBenchmark {
           mutatedConf);
       SchedConfUpdateInfo restore = changedProperties(mutatedConf,
           originalConf);
+      provider.runUnderMutationLock(() ->
+          cs.runWithStableQueueConfiguration(() -> {
+            requireEligible(validationEngine.compile(mutatedModel,
+                ClusterFacts.capture(cs)));
+            return null;
+          }));
       AtomicBoolean applyMutated = new AtomicBoolean(true);
       measure("atomic-apply", requestedQueues, gen.getQueueCount(), warmups,
           iterations, iteration -> {
@@ -275,6 +286,8 @@ public class CSConfigBaselineBenchmark {
       // Preserve the foundation phase order through complete atomic apply.
       measureCompiledPlanPhases(requestedQueues, gen, warmups, iterations,
           originalModel, mutatedModel, ClusterFacts.capture(cs));
+      measureCompiledActivationPhases(provider, requestedQueues,
+          gen.getQueueCount(), warmups, iterations, mutate, restore);
     } finally {
       rm.stop();
       QueueMetrics.clearQueueMetrics();
@@ -353,6 +366,51 @@ public class CSConfigBaselineBenchmark {
           requireValid(result);
           return elapsed;
         });
+  }
+
+  private void measureCompiledActivationPhases(SeededMutableProvider provider,
+      int requestedQueues, int actualQueues, int warmups, int iterations,
+      SchedConfUpdateInfo mutate, SchedConfUpdateInfo restore) throws Exception {
+    requireValid(provider.applyMutation(BENCHMARK_USER, restore));
+    // Keep instrumentation out of the headline atomic-apply measurement.
+    // Forward to the real constructors without replacing the queue manager or
+    // its context. Each sample is one complete, committed provider mutation.
+    ValidatedQueuePlanMaterializer delegate = new ValidatedQueuePlanMaterializer();
+    long[] materialization = new long[iterations];
+    long[] activation = new long[iterations];
+    long[] timing = new long[3];
+    try (MockedConstruction<ValidatedQueuePlanMaterializer> ignored =
+        mockConstruction(ValidatedQueuePlanMaterializer.class, (mock, context) ->
+            when(mock.materialize(any(), any(), any())).thenAnswer(invocation -> {
+              timing[2]++;
+              long start = System.nanoTime();
+              CSQueue root = delegate.materialize(invocation.getArgument(0),
+                  invocation.getArgument(1), invocation.getArgument(2));
+              timing[1] = System.nanoTime();
+              timing[0] = timing[1] - start;
+              return root;
+            }))) {
+      System.gc();
+      for (int i = -warmups; i < iterations; i++) {
+        Arrays.fill(timing, 0);
+        ValidationResult result = provider.applyMutation(BENCHMARK_USER,
+            i % 2 == 0 ? mutate : restore);
+        long end = System.nanoTime();
+        requireValid(result);
+        if (timing[2] != 1) {
+          throw new IllegalStateException("Expected exactly one compiled materialization, got "
+              + timing[2]);
+        }
+        if (i >= 0) {
+          materialization[i] = timing[0];
+          activation[i] = end - timing[1];
+        }
+      }
+    }
+    report("compiled-materialization", requestedQueues, actualQueues, warmups,
+        materialization);
+    report("compiled-activation-after-materialization", requestedQueues,
+        actualQueues, warmups, activation);
   }
 
   private void measureLiveMaterialization(CapacityScheduler cs,
