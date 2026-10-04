@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Shared types for store slices
  */
@@ -32,6 +31,7 @@ import type {
   QueueCapacitiesByPartition,
   ValidationIssue,
 } from '~/types';
+import type { ExplainIndex } from '~/features/validation/service';
 import type { PlacementRulesSlice } from './placementRulesSlice';
 import type { CapacityEditorSlice } from './capacityEditorSlice';
 
@@ -43,6 +43,7 @@ export interface SchedulerDataSlice {
   schedulerData: SchedulerInfo | null;
   configData: Map<string, string>;
   configVersion: number;
+  configEtag: string | null;
   isLoading: boolean;
   error: string | null;
   errorContext: 'load' | 'mutation' | 'nodeLabels' | null;
@@ -67,30 +68,45 @@ export interface NodeLabelsSlice {
 export interface StagedChangesSlice {
   stagedChanges: StagedChange[];
   applyError: string | null;
-  stageQueueChange: (
-    queuePath: string,
-    property: string,
-    value: string,
-    validationErrors?: ValidationIssue[],
-  ) => void;
+  /** Issues of the last validated proposal, from validate/v2. */
+  serverIssues: ValidationIssue[];
+  /** Warnings of the last applied proposal, kept until dismissed or the next edit. */
+  appliedWarnings: ValidationIssue[];
+  /** Set when the validation request itself failed, so no result is available. */
+  validationError: string | null;
+  isValidatingProposal: boolean;
+  /** Identity of the current proposal and of the one serverIssues belong to. */
+  proposalKey: string | null;
+  validatedProposalKey: string | null;
+  /** Set by a 412 on apply; cleared by compareFreshBaseline. */
+  proposalStale: boolean;
+  /** Resolved value sources per queue path and full property key, from validate/v2 explain. */
+  explain: ExplainIndex;
+  explainProposalKey: string | null;
+  validateProposal: () => Promise<boolean>;
+  /**
+   * Loads the explain entry of one queue for the current proposal, unless the pending
+   * validation will provide it. Requests each queue at most once per proposal.
+   */
+  loadExplain: (queuePath: string) => Promise<void>;
+  compareFreshBaseline: () => Promise<void>;
+  dismissAppliedWarnings: () => void;
+  stageQueueChange: (queuePath: string, property: string, value: string) => void;
   stageGlobalChange: (
     property: string,
     value: string | Record<string, unknown> | unknown[],
-    validationErrors?: ValidationIssue[],
   ) => void;
   stageQueueAddition: (
     parentPath: string,
     queueName: string,
     config: Record<string, string>,
-    validationErrors?: ValidationIssue[],
   ) => void;
-  stageQueueRemoval: (queuePath: string, validationErrors?: ValidationIssue[]) => void;
+  stageQueueRemoval: (queuePath: string) => void;
   stageLabelQueueChange: (
     queuePath: string,
     label: string,
     property: string,
     value: string,
-    validationErrors?: ValidationIssue[],
   ) => void;
   applyChanges: () => Promise<void>;
   revertChange: (changeId: string) => void;
@@ -102,11 +118,6 @@ export interface StagedChangesSlice {
   hasPendingDeletion: (queuePath: string) => boolean;
   getStagedChangeById: (changeId: string) => StagedChange | undefined;
   getLabelChangesForQueue: (queuePath: string, label: string) => StagedChange[];
-  refreshValidationErrors: () => void;
-  refreshAffectedValidationErrors: (
-    triggeringQueuePath: string,
-    triggeringProperty: string,
-  ) => void;
 }
 
 export interface QueueSelectionSlice {

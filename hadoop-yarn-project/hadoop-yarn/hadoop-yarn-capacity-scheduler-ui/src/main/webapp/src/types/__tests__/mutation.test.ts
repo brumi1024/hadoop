@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect } from 'vitest';
 import type { MutationError, ValidationResponse } from '~/types/mutation';
 
@@ -51,40 +50,48 @@ describe('MutationError interface', () => {
 });
 
 describe('ValidationResponse interface', () => {
-  it('should accept successful validation response', () => {
-    const validResponse: ValidationResponse = {
-      validation: 'success',
-      versionId: 12345,
-    };
+  it('should accept a valid result without issues', () => {
+    const validResponse: ValidationResponse = { valid: true, issues: [], explain: [] };
 
-    expect(validResponse.validation).toBe('success');
-    expect(validResponse.errors).toBeUndefined();
-    expect(validResponse.versionId).toBe(12345);
+    expect(validResponse.valid).toBe(true);
+    expect(validResponse.issues).toHaveLength(0);
   });
 
-  it('should accept validation failure response', () => {
-    const invalidResponse: ValidationResponse = {
-      validation: 'failed',
-      errors: [
-        'Queue capacity for root.production children does not sum to 100%',
-        'Maximum capacity cannot be less than capacity for queue root.dev',
+  it('should accept global and queue issues with explained values', () => {
+    const response: ValidationResponse = {
+      valid: false,
+      issues: [
+        {
+          queuePath: null,
+          propertyKey: null,
+          ruleId: 'invalid-mutation',
+          severity: 'ERROR',
+          message: 'Queue root.missing not found',
+        },
+        {
+          queuePath: 'root.a',
+          propertyKey: 'yarn.scheduler.capacity.root.a.capacity',
+          ruleId: 'invalid-capacity',
+          severity: 'WARNING',
+          message: 'Capacity is low',
+        },
       ],
-      mutationId: 'abc-123',
+      explain: [
+        {
+          queuePath: 'root.a',
+          properties: [
+            {
+              key: 'yarn.scheduler.capacity.root.a.user-limit-factor',
+              value: '1',
+              source: 'DEFAULT',
+              sourceDetail: null,
+            },
+          ],
+        },
+      ],
     };
 
-    expect(invalidResponse.validation).toBe('failed');
-    expect(invalidResponse.errors).toHaveLength(2);
-    expect(invalidResponse.errors?.[0]).toContain('sum to 100%');
-    expect(invalidResponse.mutationId).toBe('abc-123');
-  });
-
-  it('should handle single validation error', () => {
-    const singleErrorResponse: ValidationResponse = {
-      validation: 'failed',
-      errors: ['Queue name cannot contain dots'],
-    };
-
-    expect(singleErrorResponse.validation).toBe('failed');
-    expect(singleErrorResponse.errors).toHaveLength(1);
+    expect(response.issues[0].queuePath).toBeNull();
+    expect(response.explain[0].properties[0].source).toBe('DEFAULT');
   });
 });

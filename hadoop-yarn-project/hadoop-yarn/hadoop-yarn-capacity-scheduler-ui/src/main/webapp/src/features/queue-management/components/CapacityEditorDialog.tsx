@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import { Loader2 } from 'lucide-react';
 import {
@@ -52,6 +51,7 @@ import { RemainingHelperDisplay } from './RemainingHelperDisplay';
 import { CapacityRowEditor } from './CapacityRowEditor';
 import type { CapacityResourceMode, CapacityRowDraft } from '~/stores/slices/capacityEditorSlice';
 import { SPECIAL_VALUES } from '~/types';
+import { getPropertyIssues } from '~/features/validation/service';
 
 type VectorTarget = 'capacity' | 'maxCapacity';
 
@@ -73,7 +73,8 @@ export const CapacityEditorDialog: React.FC = () => {
   const labelsWithoutAccess = useSchedulerStore(
     (state) => state.capacityEditor.labelsWithoutAccess,
   );
-  const validationIssues = useSchedulerStore((state) => state.capacityEditor.validationIssues);
+  // Issues of the staged proposal; edits made here are validated once they are staged.
+  const serverIssues = useSchedulerStore((state) => state.serverIssues);
   const isSaving = useSchedulerStore((state) => state.capacityEditor.isSaving);
   const saveError = useSchedulerStore((state) => state.capacityEditor.saveError);
 
@@ -113,10 +114,8 @@ export const CapacityEditorDialog: React.FC = () => {
     getQueuePartitionCapacities,
   });
 
-  const hasBlockingIssues = validationIssues.some((issue) => issue.severity === 'error');
-
-  const handleSave = async (force: boolean) => {
-    const success = await saveCapacityDrafts({ force });
+  const handleSave = async () => {
+    const success = await saveCapacityDrafts();
     if (success) {
       closeCapacityEditor();
     }
@@ -195,7 +194,7 @@ export const CapacityEditorDialog: React.FC = () => {
             preventDefault: true,
             handler: () => {
               if (!isSaving) {
-                void handleSave(false);
+                void handleSave();
               }
             },
           },
@@ -275,12 +274,12 @@ export const CapacityEditorDialog: React.FC = () => {
                 ? `accessible-node-labels.${selectedNodeLabel}.maximum-capacity`
                 : 'maximum-capacity';
 
-              const capacityIssuesForRow = validationIssues.filter(
-                (issue) => issue.queuePath === row.queuePath && issue.field === capacityFieldName,
+              const capacityIssuesForRow = getPropertyIssues(
+                serverIssues,
+                row.queuePath,
+                capacityFieldName,
               );
-              const maxIssuesForRow = validationIssues.filter(
-                (issue) => issue.queuePath === row.queuePath && issue.field === maxFieldName,
-              );
+              const maxIssuesForRow = getPropertyIssues(serverIssues, row.queuePath, maxFieldName);
 
               return (
                 <CapacityRowEditor
@@ -328,22 +327,10 @@ export const CapacityEditorDialog: React.FC = () => {
             </Button>
             <Button
               type="button"
-              variant="outline"
               size="sm"
               className="text-xs"
               onClick={() => {
-                void handleSave(true);
-              }}
-              disabled={isSaving || !hasBlockingIssues}
-            >
-              Stage anyway
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              className="text-xs"
-              onClick={() => {
-                void handleSave(false);
+                void handleSave();
               }}
               disabled={isSaving}
             >

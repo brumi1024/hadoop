@@ -16,40 +16,82 @@
  * limitations under the License.
  */
 
-
 /**
- * Staged changes slice - handles all change management operations
+ * Staged changes slice - handles all change management operations.
+ *
+ * Validation is done by the server only. Every change to the staged proposal or to the
+ * loaded baseline schedules a debounced POST /scheduler-conf/validate/v2; responses for a
+ * proposal that has changed in the meantime are discarded. Apply validates the proposal
+ * once more, then writes it with If-Match set to the ETag of the last GET, and every later
+ * write of the same apply with the ETag the previous write returned.
  */
 
 import type { StateCreator } from 'zustand';
 import { nanoid } from 'nanoid';
-import { AUTO_CREATION_PROPS, MUTATION_OPERATIONS, SPECIAL_VALUES } from '~/types';
-import type { SchedConfUpdateInfo, StagedChange, ValidationIssue } from '~/types';
+import { SPECIAL_VALUES } from '~/types';
+import type { StagedChange, ValidationIssue } from '~/types';
 import {
   buildGlobalPropertyKey,
   buildNodeLabelPropertyKey,
   buildPropertyKey,
 } from '~/utils/propertyUtils';
-import { buildMutationRequest } from '~/features/staged-changes/utils/mutationBuilder';
 import {
-  getParentQueuesForAdditions,
-  getQueuesForRemoval,
-  getQueuesForAutoCreationEnable,
-  prepareMutationRequestForSubmission,
-  prepareMutationRequestWithVersion,
   applyQueueStates,
-  addQueueHierarchyToSet,
-  restartQueues,
+  buildSubmissionPlan,
+  type SubmissionPlan,
 } from '~/features/staged-changes/utils/queueStateManager';
-import { isValidQueueName } from '~/types';
-import { createStoreError, ERROR_CODES, extractErrorMessage, isNetworkError } from '~/lib/errors';
+import { getQueueNameValidationError } from '~/types';
+import {
+  createStoreError,
+  ERROR_CODES,
+  extractErrorMessage,
+  isNetworkError,
+  isPreconditionFailed,
+  YarnApiError,
+} from '~/lib/errors';
 import { assertWritable } from '~/lib/errors/readOnlyGuard';
 import type { StagedChangesSlice, SchedulerStore } from './types';
-import { getAffectedQueuesForValidation } from '~/features/validation/utils/affectedQueues';
-import { validateStagedChanges, validatePropertyChange } from '~/features/validation/crossQueue';
+import { indexExplain, toValidationIssues } from '~/features/validation/service';
 
-type MutationErrorState = Pick<SchedulerStore, 'applyError' | 'error' | 'errorContext'>;
+export const VALIDATION_DEBOUNCE_MS = 400;
+
+export const STALE_BASELINE_MESSAGE =
+  'The scheduler configuration changed after it was loaded. Nothing was applied. ' +
+  'Reload it and compare your staged changes before applying again.';
+
+const UNKNOWN_OUTCOME_MESSAGE =
+  'The outcome of the configuration update is unknown. It was not retried. ' +
+  'Reload the configuration to see whether it was applied.';
+
+const CONCURRENT_CHANGE_MESSAGE =
+  'The scheduler configuration was changed by someone else while the staged changes were ' +
+  'being applied, so they were not applied. ' +
+  'Reload it and compare your staged changes before applying again.';
+
+/** A write whose response was lost, for example to a network failure or a timeout. */
+const isUnknownOutcome = (error: unknown) => !(error instanceof YarnApiError);
+
+const describeWriteError = (error: unknown) => {
+  if (isPreconditionFailed(error)) {
+    return 'the scheduler configuration was changed by someone else in the meantime';
+  }
+  if (isUnknownOutcome(error)) {
+    return `its outcome is unknown (${extractErrorMessage(error)})`;
+  }
+  return extractErrorMessage(error);
+};
+
+const stoppedQueuesNote = (queues: Set<string>) =>
+  queues.size > 0
+    ? ` These queues were stopped for the apply and may still be STOPPED: ${Array.from(queues).join(', ')}.`
+    : '';
+
+type MutationErrorState = Pick<
+  SchedulerStore,
+  'applyError' | 'error' | 'errorContext' | 'appliedWarnings'
+>;
 const clearMutationError = (state: MutationErrorState) => {
+  state.appliedWarnings = [];
   if (state.applyError) {
     state.applyError = null;
   }
@@ -59,578 +101,664 @@ const clearMutationError = (state: MutationErrorState) => {
   }
 };
 
+const submissionPlan = (state: SchedulerStore): SubmissionPlan =>
+  buildSubmissionPlan(state.stagedChanges, (path) => state.getChildQueues(path));
+
+/**
+ * Identity of what the server validates: the baseline it applies to and the proposal as
+ * it will be submitted.
+ */
+const proposalIdentity = (state: SchedulerStore, plan: SubmissionPlan): string =>
+  JSON.stringify([state.configEtag ?? state.configVersion, plan.validationRequest]);
+
+/**
+ * A response that says the proposal is invalid always has a visible reason.
+ */
+const issuesWithReason = (valid: boolean, issues: ValidationIssue[]): ValidationIssue[] => {
+  if (valid || issues.some((issue) => issue.severity === 'error')) {
+    return issues;
+  }
+  return [
+    ...issues,
+    {
+      queuePath: null,
+      propertyKey: null,
+      ruleId: 'invalid-proposal',
+      severity: 'error',
+      message: 'The server rejected the proposed configuration without details.',
+    },
+  ];
+};
+
 export const createStagedChangesSlice: StateCreator<
   SchedulerStore,
   [['zustand/immer', never]],
   [],
   StagedChangesSlice
-> = (set, get) => ({
-  stagedChanges: [],
-  applyError: null,
+> = (set, get, api) => {
+  let validationTimer: ReturnType<typeof setTimeout> | null = null;
+  // Queues whose explain was requested for explainRequestedFor. The server leaves out queues
+  // that are not in the proposed tree (e.g. one staged for removal), so a missing entry in
+  // the response does not mean the request has to be repeated.
+  let explainRequestedFor: string | null = null;
+  const explainRequested = new Set<string>();
 
-  stageQueueChange: (queuePath, property, value, validationErrors) => {
-    if (!queuePath || !queuePath.startsWith(SPECIAL_VALUES.ROOT_QUEUE_NAME)) {
-      throw createStoreError(
-        ERROR_CODES.INVALID_QUEUE_PATH,
-        `Invalid queue path: ${queuePath}. Queue paths must start with '${SPECIAL_VALUES.ROOT_QUEUE_NAME}'`,
-      );
+  const cancelScheduledValidation = () => {
+    if (validationTimer) {
+      clearTimeout(validationTimer);
+      validationTimer = null;
     }
+  };
 
-    if (!property || property.trim() === '') {
-      throw createStoreError(ERROR_CODES.INVALID_PROPERTY_NAME, 'Property name cannot be empty');
+  const scheduleValidation = () => {
+    cancelScheduledValidation();
+    const state = get();
+    const identity = proposalIdentity(state, submissionPlan(state));
+    if (identity === state.proposalKey) {
+      return;
     }
-
-    let mutated = false;
-    set((state) => {
-      const propertyKey = buildPropertyKey(queuePath, property);
-      const originalValue = state.configData.get(propertyKey);
-
-      const existingIndex = state.stagedChanges.findIndex(
-        (c) => c.queuePath === queuePath && c.property === property,
-      );
-
-      // If the new value matches the original value, remove the staged change
-      if (value === originalValue && existingIndex >= 0) {
-        state.stagedChanges.splice(existingIndex, 1);
-        mutated = true;
-      } else if (existingIndex >= 0) {
-        // Update existing staged change
-        state.stagedChanges[existingIndex].newValue = value;
-        state.stagedChanges[existingIndex].validationErrors = validationErrors;
-        mutated = true;
-      } else if (value !== originalValue) {
-        // Only create a new staged change if the value differs from the original
-        const change: StagedChange = {
-          id: nanoid(),
-          type: 'update',
-          queuePath,
-          property,
-          oldValue: originalValue,
-          newValue: value,
-          timestamp: Date.now(),
-          validationErrors,
-        };
-        state.stagedChanges.push(change);
-        mutated = true;
-      }
-
-      if (mutated) {
-        clearMutationError(state);
-      }
+    if (state.stagedChanges.length === 0) {
+      set((next) => {
+        next.proposalKey = identity;
+        next.serverIssues = [];
+        next.validationError = null;
+        next.isValidatingProposal = false;
+      });
+      return;
+    }
+    set((next) => {
+      next.proposalKey = identity;
+      next.isValidatingProposal = true;
     });
+    validationTimer = setTimeout(() => {
+      validationTimer = null;
+      void get().validateProposal();
+    }, VALIDATION_DEBOUNCE_MS);
+  };
 
-    // Refresh validation errors for affected changes
-    get().refreshAffectedValidationErrors(queuePath, property);
-  },
-
-  stageGlobalChange: (property, value, validationErrors) => {
-    let mutated = false;
-    set((state) => {
-      // For JSON properties like placement rules, stringify the value if it's an object
-      let stringValue: string;
-      if (property === SPECIAL_VALUES.MAPPING_RULE_JSON_PROPERTY && typeof value === 'object') {
-        stringValue = JSON.stringify(value);
-      } else {
-        stringValue = String(value);
-      }
-
-      const propertyKey = buildGlobalPropertyKey(property);
-      const originalValue = state.configData.get(propertyKey);
-
-      const existingIndex = state.stagedChanges.findIndex(
-        (c) => c.queuePath === SPECIAL_VALUES.GLOBAL_QUEUE_PATH && c.property === property,
-      );
-
-      // If the new value matches the original value, remove the staged change
-      if (stringValue === originalValue && existingIndex >= 0) {
-        state.stagedChanges.splice(existingIndex, 1);
-        mutated = true;
-      } else if (existingIndex >= 0) {
-        // Update existing staged change
-        state.stagedChanges[existingIndex].newValue = stringValue;
-        state.stagedChanges[existingIndex].validationErrors = validationErrors;
-        mutated = true;
-      } else if (stringValue !== originalValue) {
-        // Only create a new staged change if the value differs from the original
-        const change: StagedChange = {
-          id: nanoid(),
-          type: 'update',
-          queuePath: SPECIAL_VALUES.GLOBAL_QUEUE_PATH,
-          property,
-          oldValue: originalValue,
-          newValue: stringValue,
-          timestamp: Date.now(),
-          validationErrors,
-        };
-        state.stagedChanges.push(change);
-        mutated = true;
-      }
-
-      if (mutated) {
-        clearMutationError(state);
-      }
-    });
-
-    // Refresh validation errors for affected changes
-    get().refreshAffectedValidationErrors(SPECIAL_VALUES.GLOBAL_QUEUE_PATH, property);
-  },
-
-  stageQueueAddition: (parentPath, queueName, config, validationErrors) => {
-    if (!isValidQueueName(queueName)) {
-      throw createStoreError(
-        ERROR_CODES.INVALID_QUEUE_NAME,
-        `Invalid queue name: "${queueName}". Queue names must contain only letters, numbers, hyphens, and underscores.`,
-      );
+  // Validation follows the store, not whichever panel is open.
+  api?.subscribe?.((state, previous) => {
+    if (
+      state.stagedChanges !== previous.stagedChanges ||
+      state.configEtag !== previous.configEtag ||
+      state.schedulerData !== previous.schedulerData
+    ) {
+      scheduleValidation();
     }
+  });
 
-    const newQueuePath =
-      parentPath === SPECIAL_VALUES.ROOT_QUEUE_NAME
-        ? `${SPECIAL_VALUES.ROOT_QUEUE_NAME}.${queueName}`
-        : `${parentPath}.${queueName}`;
+  return {
+    stagedChanges: [],
+    applyError: null,
+    serverIssues: [],
+    appliedWarnings: [],
+    validationError: null,
+    isValidatingProposal: false,
+    proposalKey: null,
+    validatedProposalKey: null,
+    proposalStale: false,
+    explain: {},
+    explainProposalKey: null,
 
-    const { schedulerData, configData, stagedChanges: existingStagedChanges } = get();
-    const capacityValue = config.capacity;
+    validateProposal: async () => {
+      cancelScheduledValidation();
+      const state = get();
+      const plan = submissionPlan(state);
+      const identity = proposalIdentity(state, plan);
+      const isCurrent = () => proposalIdentity(get(), submissionPlan(get())) === identity;
 
-    const previewStagedChanges =
-      typeof capacityValue === 'string'
-        ? [
-            ...existingStagedChanges,
-            {
-              id: 'preview-add-capacity',
-              type: 'add' as const,
-              queuePath: newQueuePath,
-              property: 'capacity',
-              oldValue: undefined,
-              newValue: capacityValue,
-              timestamp: Date.now(),
-            },
-          ]
-        : existingStagedChanges;
+      if (state.stagedChanges.length === 0) {
+        set((next) => {
+          next.proposalKey = identity;
+          next.validatedProposalKey = identity;
+          next.serverIssues = [];
+          next.validationError = null;
+          next.isValidatingProposal = false;
+        });
+        return true;
+      }
 
-    const computedCapacityErrors =
-      typeof capacityValue === 'string'
-        ? validatePropertyChange({
-            propertyName: 'capacity',
-            propertyValue: capacityValue,
-            queuePath: newQueuePath,
-            schedulerData,
-            configData,
-            stagedChanges: previewStagedChanges,
-            includeBlockingErrors: true,
-          })
-        : [];
+      set((next) => {
+        next.proposalKey = identity;
+        next.isValidatingProposal = true;
+      });
 
-    set((state) => {
-      let mutated = false;
-      // Check if queue already exists
-      const queue = get().getQueueByPath(newQueuePath);
-      if (queue) {
+      try {
+        const response = await state.apiClient.validateSchedulerConf(plan.validationRequest, {
+          explain: 'affected',
+        });
+        if (!isCurrent()) {
+          return false;
+        }
+        const issues = issuesWithReason(response.valid, toValidationIssues(response.issues));
+        const explained = indexExplain(response.explain);
+        set((next) => {
+          next.serverIssues = issues;
+          next.validationError = null;
+          next.validatedProposalKey = identity;
+          next.isValidatingProposal = false;
+          next.explain =
+            next.explainProposalKey === identity ? { ...next.explain, ...explained } : explained;
+          next.explainProposalKey = identity;
+        });
+        return response.valid;
+      } catch (error) {
+        if (isCurrent()) {
+          set((next) => {
+            next.serverIssues = [];
+            next.validationError = `Validation failed: ${extractErrorMessage(error)}`;
+            next.validatedProposalKey = null;
+            next.isValidatingProposal = false;
+          });
+        }
+        return false;
+      }
+    },
+
+    loadExplain: async (queuePath) => {
+      const state = get();
+      const plan = submissionPlan(state);
+      const identity = proposalIdentity(state, plan);
+      // The scheduled validation explains the affected queues; ask for this queue only if
+      // that answer leaves it out.
+      if (state.isValidatingProposal && state.proposalKey === identity) {
+        return;
+      }
+      if (state.explainProposalKey === identity && state.explain[queuePath]) {
+        return;
+      }
+      if (explainRequestedFor !== identity) {
+        explainRequestedFor = identity;
+        explainRequested.clear();
+      }
+      if (explainRequested.has(queuePath)) {
+        return;
+      }
+      explainRequested.add(queuePath);
+      try {
+        const response = await state.apiClient.validateSchedulerConf(plan.validationRequest, {
+          explain: [queuePath],
+        });
+        if (proposalIdentity(get(), submissionPlan(get())) !== identity) {
+          return;
+        }
+        const explained = indexExplain(response.explain);
+        if (get().explainProposalKey === identity && Object.keys(explained).length === 0) {
+          return;
+        }
+        set((next) => {
+          next.explain =
+            next.explainProposalKey === identity ? { ...next.explain, ...explained } : explained;
+          next.explainProposalKey = identity;
+        });
+      } catch (error) {
+        // Source labels are informational; validation errors are reported by validateProposal.
+        console.warn('Failed to load resolved value sources:', extractErrorMessage(error));
+        if (explainRequestedFor === identity) {
+          explainRequested.delete(queuePath);
+        }
+      }
+    },
+
+    compareFreshBaseline: async () => {
+      // An explicit user action: keep the edits and show what changed underneath them.
+      await get().loadInitialData();
+      set((state) => {
+        state.proposalStale = false;
+        state.applyError = null;
+        state.stagedChanges.forEach((change) => {
+          if (change.type !== 'update') return;
+          const key =
+            change.queuePath === SPECIAL_VALUES.GLOBAL_QUEUE_PATH
+              ? buildGlobalPropertyKey(change.property)
+              : buildPropertyKey(change.queuePath, change.property);
+          const current = state.configData.get(key);
+          if (current !== change.oldValue) {
+            change.baselineDrift = { stagedAgainst: change.oldValue, current };
+            change.oldValue = current;
+          }
+        });
+      });
+      await get().validateProposal();
+    },
+
+    dismissAppliedWarnings: () => {
+      set((state) => {
+        state.appliedWarnings = [];
+      });
+    },
+
+    stageQueueChange: (queuePath, property, value) => {
+      if (!queuePath || !queuePath.startsWith(SPECIAL_VALUES.ROOT_QUEUE_NAME)) {
         throw createStoreError(
-          ERROR_CODES.QUEUE_ALREADY_EXISTS,
-          `Queue "${newQueuePath}" already exists`,
+          ERROR_CODES.INVALID_QUEUE_PATH,
+          `Invalid queue path: ${queuePath}. Queue paths must start with '${SPECIAL_VALUES.ROOT_QUEUE_NAME}'`,
         );
       }
 
-      // Remove any existing changes for the same queue
-      const beforeLength = state.stagedChanges.length;
-      state.stagedChanges = state.stagedChanges.filter((c) => c.queuePath !== newQueuePath);
-      if (state.stagedChanges.length !== beforeLength) {
-        mutated = true;
+      if (!property || property.trim() === '') {
+        throw createStoreError(ERROR_CODES.INVALID_PROPERTY_NAME, 'Property name cannot be empty');
       }
 
-      // Create one staged change per property
-      Object.entries(config).forEach(([property, value]) => {
+      let mutated = false;
+      set((state) => {
+        const propertyKey = buildPropertyKey(queuePath, property);
+        const originalValue = state.configData.get(propertyKey);
+
+        const existingIndex = state.stagedChanges.findIndex(
+          (c) => c.queuePath === queuePath && c.property === property,
+        );
+
+        // If the new value matches the original value, remove the staged change
+        if (value === originalValue && existingIndex >= 0) {
+          state.stagedChanges.splice(existingIndex, 1);
+          mutated = true;
+        } else if (existingIndex >= 0) {
+          // Update existing staged change
+          state.stagedChanges[existingIndex].newValue = value;
+          mutated = true;
+        } else if (value !== originalValue) {
+          // Only create a new staged change if the value differs from the original
+          const change: StagedChange = {
+            id: nanoid(),
+            type: 'update',
+            queuePath,
+            property,
+            oldValue: originalValue,
+            newValue: value,
+            timestamp: Date.now(),
+          };
+          state.stagedChanges.push(change);
+          mutated = true;
+        }
+
+        if (mutated) {
+          clearMutationError(state);
+        }
+      });
+    },
+
+    stageGlobalChange: (property, value) => {
+      let mutated = false;
+      set((state) => {
+        // For JSON properties like placement rules, stringify the value if it's an object
+        let stringValue: string;
+        if (property === SPECIAL_VALUES.MAPPING_RULE_JSON_PROPERTY && typeof value === 'object') {
+          stringValue = JSON.stringify(value);
+        } else {
+          stringValue = String(value);
+        }
+
+        const propertyKey = buildGlobalPropertyKey(property);
+        const originalValue = state.configData.get(propertyKey);
+
+        const existingIndex = state.stagedChanges.findIndex(
+          (c) => c.queuePath === SPECIAL_VALUES.GLOBAL_QUEUE_PATH && c.property === property,
+        );
+
+        // If the new value matches the original value, remove the staged change
+        if (stringValue === originalValue && existingIndex >= 0) {
+          state.stagedChanges.splice(existingIndex, 1);
+          mutated = true;
+        } else if (existingIndex >= 0) {
+          // Update existing staged change
+          state.stagedChanges[existingIndex].newValue = stringValue;
+          mutated = true;
+        } else if (stringValue !== originalValue) {
+          // Only create a new staged change if the value differs from the original
+          const change: StagedChange = {
+            id: nanoid(),
+            type: 'update',
+            queuePath: SPECIAL_VALUES.GLOBAL_QUEUE_PATH,
+            property,
+            oldValue: originalValue,
+            newValue: stringValue,
+            timestamp: Date.now(),
+          };
+          state.stagedChanges.push(change);
+          mutated = true;
+        }
+
+        if (mutated) {
+          clearMutationError(state);
+        }
+      });
+    },
+
+    stageQueueAddition: (parentPath, queueName, config) => {
+      const queueNameError = getQueueNameValidationError(queueName);
+      if (queueNameError) {
+        throw createStoreError(
+          ERROR_CODES.INVALID_QUEUE_NAME,
+          `Invalid queue name: "${queueName}". ${queueNameError}`,
+        );
+      }
+
+      const newQueuePath =
+        parentPath === SPECIAL_VALUES.ROOT_QUEUE_NAME
+          ? `${SPECIAL_VALUES.ROOT_QUEUE_NAME}.${queueName}`
+          : `${parentPath}.${queueName}`;
+
+      set((state) => {
+        let mutated = false;
+        // Check if queue already exists
+        const queue = get().getQueueByPath(newQueuePath);
+        if (queue) {
+          throw createStoreError(
+            ERROR_CODES.QUEUE_ALREADY_EXISTS,
+            `Queue "${newQueuePath}" already exists`,
+          );
+        }
+
+        // Remove any existing changes for the same queue
+        const beforeLength = state.stagedChanges.length;
+        state.stagedChanges = state.stagedChanges.filter((c) => c.queuePath !== newQueuePath);
+        if (state.stagedChanges.length !== beforeLength) {
+          mutated = true;
+        }
+
+        // Create one staged change per property
+        Object.entries(config).forEach(([property, value]) => {
+          const change: StagedChange = {
+            id: nanoid(),
+            type: 'add',
+            queuePath: newQueuePath,
+            property,
+            oldValue: undefined,
+            newValue: value,
+            timestamp: Date.now(),
+          };
+          state.stagedChanges.push(change);
+          mutated = true;
+        });
+
+        if (mutated) {
+          clearMutationError(state);
+        }
+      });
+    },
+
+    stageQueueRemoval: (queuePath) => {
+      set((state) => {
+        state.stagedChanges = state.stagedChanges.filter((c) => c.queuePath !== queuePath);
+
         const change: StagedChange = {
           id: nanoid(),
-          type: 'add',
-          queuePath: newQueuePath,
-          property,
-          oldValue: undefined,
-          newValue: value,
+          type: 'remove',
+          queuePath,
+          property: SPECIAL_VALUES.QUEUE_MARKER,
+          oldValue: 'exists',
+          newValue: undefined,
           timestamp: Date.now(),
-          // Only attach validation errors to the first property (capacity) to avoid duplication
-          validationErrors:
-            property === 'capacity'
-              ? validationErrors ||
-                (computedCapacityErrors.length > 0 ? computedCapacityErrors : undefined)
-              : undefined,
         };
+
         state.stagedChanges.push(change);
-        mutated = true;
-      });
-
-      if (mutated) {
         clearMutationError(state);
+      });
+    },
+
+    stageLabelQueueChange: (queuePath, label, property, value) => {
+      if (!queuePath || !queuePath.startsWith(SPECIAL_VALUES.ROOT_QUEUE_NAME)) {
+        throw createStoreError(ERROR_CODES.INVALID_QUEUE_PATH, `Invalid queue path: ${queuePath}`);
       }
-    });
 
-    if (typeof capacityValue === 'string') {
-      get().refreshAffectedValidationErrors(newQueuePath, 'capacity');
-    }
-  },
+      if (!label || label.trim() === '') {
+        throw createStoreError(ERROR_CODES.INVALID_PROPERTY_NAME, 'Label name cannot be empty');
+      }
 
-  stageQueueRemoval: (queuePath, validationErrors) => {
-    set((state) => {
+      if (!property || property.trim() === '') {
+        throw createStoreError(ERROR_CODES.INVALID_PROPERTY_NAME, 'Property name cannot be empty');
+      }
+
+      const fullPropertyName = `accessible-node-labels.${label}.${property}`;
+
       let mutated = false;
+      set((state) => {
+        const propertyKey = buildNodeLabelPropertyKey(queuePath, label, property);
+        const originalValue = state.configData.get(propertyKey);
 
-      const beforeLength = state.stagedChanges.length;
-      state.stagedChanges = state.stagedChanges.filter((c) => c.queuePath !== queuePath);
-      if (state.stagedChanges.length !== beforeLength) {
-        mutated = true;
-      }
+        const existingIndex = state.stagedChanges.findIndex(
+          (c) => c.queuePath === queuePath && c.property === fullPropertyName,
+        );
 
-      const change: StagedChange = {
-        id: nanoid(),
-        type: 'remove',
-        queuePath,
-        property: SPECIAL_VALUES.QUEUE_MARKER,
-        oldValue: 'exists',
-        newValue: undefined,
-        timestamp: Date.now(),
-        validationErrors,
+        // If the new value matches the original value, remove the staged change
+        if (value === originalValue && existingIndex >= 0) {
+          state.stagedChanges.splice(existingIndex, 1);
+          mutated = true;
+        } else if (existingIndex >= 0) {
+          // Update existing staged change
+          state.stagedChanges[existingIndex].newValue = value;
+          state.stagedChanges[existingIndex].label = label;
+          mutated = true;
+        } else if (value !== originalValue) {
+          // Only create a new staged change if the value differs from the original
+          const change: StagedChange = {
+            id: nanoid(),
+            type: 'update',
+            queuePath,
+            property: fullPropertyName,
+            oldValue: originalValue,
+            newValue: value,
+            timestamp: Date.now(),
+            label,
+          };
+          state.stagedChanges.push(change);
+          mutated = true;
+        }
+
+        if (mutated) {
+          clearMutationError(state);
+        }
+      });
+    },
+
+    applyChanges: async () => {
+      const changes = get().stagedChanges;
+      if (changes.length === 0) return;
+
+      // Block applying changes in read-only mode
+      assertWritable(get().isReadOnly, 'apply changes');
+
+      const fail = (message: string, error?: unknown): never => {
+        set((state) => {
+          state.error = message;
+          state.errorContext = 'mutation';
+          state.applyError = message;
+          state.isLoading = false;
+        });
+        throw createStoreError(
+          isNetworkError(error) ? ERROR_CODES.NETWORK_ERROR : ERROR_CODES.APPLY_CHANGES_FAILED,
+          message,
+          error,
+        );
       };
 
-      state.stagedChanges.push(change);
-      mutated = true;
-
-      if (mutated) {
-        clearMutationError(state);
+      if (get().proposalStale) {
+        fail(STALE_BASELINE_MESSAGE);
       }
-    });
-  },
-
-  stageLabelQueueChange: (queuePath, label, property, value, validationErrors) => {
-    if (!queuePath || !queuePath.startsWith(SPECIAL_VALUES.ROOT_QUEUE_NAME)) {
-      throw createStoreError(ERROR_CODES.INVALID_QUEUE_PATH, `Invalid queue path: ${queuePath}`);
-    }
-
-    if (!label || label.trim() === '') {
-      throw createStoreError(ERROR_CODES.INVALID_PROPERTY_NAME, 'Label name cannot be empty');
-    }
-
-    if (!property || property.trim() === '') {
-      throw createStoreError(ERROR_CODES.INVALID_PROPERTY_NAME, 'Property name cannot be empty');
-    }
-
-    const fullPropertyName = `accessible-node-labels.${label}.${property}`;
-
-    let mutated = false;
-    set((state) => {
-      const propertyKey = buildNodeLabelPropertyKey(queuePath, label, property);
-      const originalValue = state.configData.get(propertyKey);
-
-      const existingIndex = state.stagedChanges.findIndex(
-        (c) => c.queuePath === queuePath && c.property === fullPropertyName,
-      );
-
-      // If the new value matches the original value, remove the staged change
-      if (value === originalValue && existingIndex >= 0) {
-        state.stagedChanges.splice(existingIndex, 1);
-        mutated = true;
-      } else if (existingIndex >= 0) {
-        // Update existing staged change
-        state.stagedChanges[existingIndex].newValue = value;
-        state.stagedChanges[existingIndex].label = label;
-        state.stagedChanges[existingIndex].validationErrors = validationErrors;
-        mutated = true;
-      } else if (value !== originalValue) {
-        // Only create a new staged change if the value differs from the original
-        const change: StagedChange = {
-          id: nanoid(),
-          type: 'update',
-          queuePath,
-          property: fullPropertyName,
-          oldValue: originalValue,
-          newValue: value,
-          timestamp: Date.now(),
-          label,
-          validationErrors,
-        };
-        state.stagedChanges.push(change);
-        mutated = true;
-      }
-
-      if (mutated) {
-        clearMutationError(state);
-      }
-    });
-
-    // Refresh validation errors for affected changes
-    get().refreshAffectedValidationErrors(queuePath, fullPropertyName);
-  },
-
-  applyChanges: async () => {
-    const changes = get().stagedChanges;
-    if (changes.length === 0) return;
-
-    // Block applying changes in read-only mode
-    assertWritable(get().isReadOnly, 'apply changes');
-
-    set((state) => {
-      state.isLoading = true;
-      if (state.errorContext === 'mutation') {
-        state.error = null;
-        state.errorContext = null;
-      }
-      state.applyError = null;
-    });
-
-    const mutationRequest = buildMutationRequest(changes);
-    const { request: submissionRequest, childQueuesToStart } =
-      prepareMutationRequestForSubmission(mutationRequest);
-
-    const parentQueuesToStop = getParentQueuesForAdditions(
-      submissionRequest[MUTATION_OPERATIONS.ADD_QUEUE],
-    );
-    const queuesToStopForRemoval = getQueuesForRemoval(
-      submissionRequest[MUTATION_OPERATIONS.REMOVE_QUEUE],
-    );
-    const queuesToStopForAutoCreation = getQueuesForAutoCreationEnable(changes);
-
-    const parentQueuesStopped = new Set<string>();
-    const removalQueuesStopped = new Set<string>();
-    const autoCreationQueuesStopped = new Set<string>();
-    const apiClient = get().apiClient;
-    let mutationApplied = false;
-
-    // Helper to get child queues for hierarchy collection
-    const getChildQueues = (path: string) => get().getChildQueues(path);
-
-    const restartParents = async () => restartQueues(parentQueuesStopped, apiClient);
-    const restartRemovalQueues = async () => restartQueues(removalQueuesStopped, apiClient);
-    const restartAutoCreationQueues = async () =>
-      restartQueues(autoCreationQueuesStopped, apiClient);
-
-    try {
-      for (const parentQueue of parentQueuesToStop) {
-        addQueueHierarchyToSet(parentQueue, parentQueuesStopped, getChildQueues);
-      }
-
-      for (const queueName of queuesToStopForRemoval) {
-        addQueueHierarchyToSet(queueName, removalQueuesStopped, getChildQueues);
-      }
-
-      for (const queueName of queuesToStopForAutoCreation) {
-        addQueueHierarchyToSet(queueName, autoCreationQueuesStopped, getChildQueues);
-      }
-
-      const allQueuesToStop = new Set<string>([
-        ...parentQueuesStopped,
-        ...removalQueuesStopped,
-        ...autoCreationQueuesStopped,
-      ]);
-
-      if (allQueuesToStop.size > 0) {
-        await applyQueueStates(allQueuesToStop, 'STOPPED', apiClient);
-      }
-
-      const validationResponse = await apiClient.validateSchedulerConf(submissionRequest);
-
-      if (validationResponse.validation === 'failed') {
-        const validationMessage = validationResponse.errors?.join('; ').trim();
-        throw new Error(validationMessage || 'Scheduler configuration validation failed');
-      }
-
-      const mutationVersion =
-        validationResponse.versionId ??
-        validationResponse.mutationId ??
-        validationResponse.newVersionId;
-
-      const finalMutation = prepareMutationRequestWithVersion(submissionRequest, mutationVersion);
-
-      await apiClient.updateSchedulerConf(finalMutation);
-      mutationApplied = true;
-
-      await restartParents();
-      await restartAutoCreationQueues();
-
-      for (const queueName of childQueuesToStart) {
-        await applyQueueStates([queueName], 'RUNNING', apiClient);
-      }
-
-      // Reload configuration after successful update
-      const [config, version] = await Promise.all([
-        apiClient.getSchedulerConf(),
-        apiClient.getSchedulerConfVersion(),
-      ]);
 
       set((state) => {
-        // Update config data
-        state.configData = new Map(config.property.map((p) => [p.name, p.value]));
-        state.configVersion = version.versionId;
-
-        // Clear staged changes
-        state.stagedChanges = [];
-        state.isLoading = false;
-        if (state.errorContext === 'mutation') {
-          state.error = null;
-          state.errorContext = null;
-        }
-        state.applyError = null;
+        state.isLoading = true;
+        clearMutationError(state);
       });
 
-      // Refresh scheduler data to get updated queue information
-      await get().refreshSchedulerData();
-    } catch (error) {
-      const errorMessage = extractErrorMessage(error);
+      // Validate the exact submission before any write, including the queue stops below.
+      const plan = submissionPlan(get());
+      const identity = proposalIdentity(get(), plan);
+      const valid = await get().validateProposal();
+      if (!valid || proposalIdentity(get(), submissionPlan(get())) !== identity) {
+        const errors = get().serverIssues.filter((issue) => issue.severity === 'error');
+        fail(
+          get().validationError ??
+            (errors.length > 0
+              ? `Validation failed: ${errors.map((issue) => issue.message).join('; ')}`
+              : 'The staged changes changed during validation. Apply again.'),
+        );
+      }
+      const warnings = get().serverIssues.filter((issue) => issue.severity === 'warning');
+
+      const apiClient = get().apiClient;
+      // Every write is conditional on the ETag of the configuration the previous write
+      // committed, starting from the loaded baseline, so a change someone else makes between
+      // two writes of this apply fails the next write instead of being overwritten.
+      let etag: string | null = get().configEtag;
+      const writeStates = async (queues: Iterable<string>, state: 'STOPPED' | 'RUNNING') => {
+        const result = await applyQueueStates(queues, state, apiClient, { ifMatch: etag });
+        if (result) {
+          etag = result.etag;
+        }
+      };
+
+      const removalQueues = new Set(plan.removalQueuesToStop);
+      const stopped = new Set([
+        ...plan.parentQueuesToStop,
+        ...plan.removalQueuesToStop,
+        ...plan.autoCreationQueuesToStop,
+      ]);
+      const restartedAfterCommit = new Set(
+        [...plan.parentQueuesToStop, ...plan.autoCreationQueuesToStop].filter(
+          (queue) => !removalQueues.has(queue),
+        ),
+      );
+
+      // Nothing more is written after a write that found someone else's change or whose
+      // outcome is unknown: the user reloads and reconciles instead.
+      const failUncommitted = (error: unknown, possiblyStopped: Set<string>): never => {
+        const note = stoppedQueuesNote(possiblyStopped);
+        if (isPreconditionFailed(error)) {
+          set((state) => {
+            state.proposalStale = true;
+          });
+          fail(note ? `${CONCURRENT_CHANGE_MESSAGE}${note}` : STALE_BASELINE_MESSAGE, error);
+        }
+        if (isUnknownOutcome(error)) {
+          fail(`${UNKNOWN_OUTCOME_MESSAGE} (${extractErrorMessage(error)})${note}`, error);
+        }
+        return fail(extractErrorMessage(error), error);
+      };
+
+      if (stopped.size > 0) {
+        try {
+          await writeStates(stopped, 'STOPPED');
+        } catch (error) {
+          failUncommitted(error, isUnknownOutcome(error) ? stopped : new Set());
+        }
+      }
+
+      try {
+        etag = (await apiClient.updateSchedulerConf(plan.request, { ifMatch: etag })).etag;
+      } catch (error) {
+        if (isPreconditionFailed(error) || isUnknownOutcome(error)) {
+          failUncommitted(error, stopped);
+        }
+        // The server rejected the mutation, so the configuration is still the one the stop
+        // committed: restart the stopped queues, conditional on it.
+        let restartError = '';
+        try {
+          await writeStates(stopped, 'RUNNING');
+        } catch (restart) {
+          restartError = ` Restarting the stopped queues also failed: ${describeWriteError(restart)}.${stoppedQueuesNote(stopped)}`;
+        }
+        fail(`${extractErrorMessage(error)}${restartError}`, error);
+      }
+
+      // The mutation is committed; failing to restart or start queues must not keep it staged.
+      let followUpError: string | null = null;
+      try {
+        await writeStates(restartedAfterCommit, 'RUNNING');
+      } catch (error) {
+        followUpError = `The configuration was applied, but restarting the queues stopped for it failed: ${describeWriteError(error)}.${stoppedQueuesNote(restartedAfterCommit)}`;
+      }
+      if (!followUpError) {
+        try {
+          await writeStates(plan.childQueuesToStart, 'RUNNING');
+        } catch (error) {
+          followUpError = `The configuration was applied, but starting the new queues failed: ${describeWriteError(error)}`;
+        }
+      }
 
       set((state) => {
-        state.error = errorMessage;
-        state.errorContext = 'mutation';
-        state.applyError = errorMessage;
-        state.isLoading = false;
+        // Edits made while the write was in flight belong to the next proposal.
+        state.stagedChanges = state.stagedChanges.filter(
+          (change) =>
+            !changes.some(
+              (submitted) => submitted.id === change.id && submitted.newValue === change.newValue,
+            ),
+        );
       });
 
-      throw createStoreError(
-        isNetworkError(error) ? ERROR_CODES.NETWORK_ERROR : ERROR_CODES.APPLY_CHANGES_FAILED,
-        errorMessage,
-        error,
-      );
-    } finally {
-      await restartParents();
-      await restartAutoCreationQueues();
-      if (!mutationApplied) {
-        await restartRemovalQueues();
+      try {
+        await get().loadInitialData();
+      } catch (error) {
+        fail(extractErrorMessage(error), error);
       }
-    }
-  },
 
-  revertChange: (changeId) => {
-    set((state) => {
-      const beforeLength = state.stagedChanges.length;
-      state.stagedChanges = state.stagedChanges.filter((c) => c.id !== changeId);
-      if (state.stagedChanges.length !== beforeLength) {
+      set((state) => {
+        state.isLoading = false;
         clearMutationError(state);
-      }
-    });
-
-    // Refresh validation errors for remaining staged changes
-    get().refreshValidationErrors();
-  },
-
-  clearAllChanges: () => {
-    set((state) => {
-      if (state.stagedChanges.length > 0) {
-        state.stagedChanges = [];
-        clearMutationError(state);
-      }
-    });
-  },
-
-  clearQueueChanges: (queuePath) => {
-    set((state) => {
-      const beforeLength = state.stagedChanges.length;
-      state.stagedChanges = state.stagedChanges.filter((c) => c.queuePath !== queuePath);
-      if (state.stagedChanges.length !== beforeLength) {
-        clearMutationError(state);
-      }
-    });
-
-    // Refresh validation errors for remaining staged changes
-    get().refreshValidationErrors();
-  },
-
-  hasUnsavedChanges: () => {
-    return get().stagedChanges.length > 0;
-  },
-
-  getChangesForQueue: (queuePath) => {
-    return get().stagedChanges.filter((c) => c.queuePath === queuePath);
-  },
-
-  hasPendingDeletion: (queuePath) => {
-    return get().stagedChanges.some((c) => c.queuePath === queuePath && c.type === 'remove');
-  },
-
-  revertQueueDeletion: (queuePath) => {
-    const removalChange = get().stagedChanges.find(
-      (c) => c.queuePath === queuePath && c.type === 'remove',
-    );
-    if (removalChange) {
-      get().revertChange(removalChange.id);
-    }
-  },
-
-  getStagedChangeById: (changeId) => {
-    return get().stagedChanges.find((c) => c.id === changeId);
-  },
-
-  getLabelChangesForQueue: (queuePath, label) => {
-    return get().stagedChanges.filter((c) => c.queuePath === queuePath && c.label === label);
-  },
-
-  refreshValidationErrors: () => {
-    const { stagedChanges, schedulerData, configData } = get();
-
-    if (!schedulerData || stagedChanges.length === 0) {
-      return;
-    }
-
-    // Validate all staged changes using the unified validation function
-    const validationResults = validateStagedChanges({
-      stagedChanges,
-      schedulerData,
-      configData,
-    });
-
-    set((state) => {
-      // Update each staged change with its validation errors
-      state.stagedChanges = state.stagedChanges.map((change) => ({
-        ...change,
-        validationErrors: validationResults.get(change.id),
-      }));
-    });
-  },
-
-  refreshAffectedValidationErrors: (triggeringQueuePath: string, triggeringProperty: string) => {
-    const { stagedChanges, schedulerData, configData } = get();
-
-    if (!schedulerData || stagedChanges.length === 0) {
-      return;
-    }
-
-    // Determine which queues and properties could be affected
-    const affectedQueues = getAffectedQueuesForValidation(
-      triggeringProperty,
-      triggeringQueuePath,
-      schedulerData,
-      stagedChanges,
-    );
-
-    const affectedQueuePaths = new Set(affectedQueues);
-    const affectedProperties = new Set<string>();
-
-    // Some properties affect validation of other properties
-    if (triggeringProperty === 'capacity') {
-      affectedProperties.add('capacity');
-      affectedProperties.add('maximum-capacity');
-    } else if (triggeringProperty === SPECIAL_VALUES.LEGACY_MODE_PROPERTY) {
-      // Legacy mode affects all capacity validations
-      affectedProperties.add('capacity');
-      affectedProperties.add('maximum-capacity');
-      // Need to re-validate all queues when legacy mode changes
-      stagedChanges.forEach((change) => {
-        if (change.queuePath) {
-          affectedQueuePaths.add(change.queuePath);
+        state.appliedWarnings = warnings;
+        if (followUpError) {
+          state.applyError = followUpError;
         }
       });
-    }
+    },
 
-    // Selectively validate only affected changes using the unified validation function
-    const validationResults = validateStagedChanges({
-      stagedChanges,
-      schedulerData,
-      configData,
-      affectedQueuePaths,
-      affectedProperties,
-    });
+    revertChange: (changeId) => {
+      set((state) => {
+        const beforeLength = state.stagedChanges.length;
+        state.stagedChanges = state.stagedChanges.filter((c) => c.id !== changeId);
+        if (state.stagedChanges.length !== beforeLength) {
+          clearMutationError(state);
+        }
+      });
+    },
 
-    set((state) => {
-      // Update each staged change with its validation errors
-      state.stagedChanges = state.stagedChanges.map((change) => ({
-        ...change,
-        validationErrors: validationResults.get(change.id),
-      }));
-    });
-  },
-});
+    clearAllChanges: () => {
+      set((state) => {
+        if (state.stagedChanges.length > 0) {
+          state.stagedChanges = [];
+          clearMutationError(state);
+        }
+      });
+    },
+
+    clearQueueChanges: (queuePath) => {
+      set((state) => {
+        const beforeLength = state.stagedChanges.length;
+        state.stagedChanges = state.stagedChanges.filter((c) => c.queuePath !== queuePath);
+        if (state.stagedChanges.length !== beforeLength) {
+          clearMutationError(state);
+        }
+      });
+    },
+
+    hasUnsavedChanges: () => {
+      return get().stagedChanges.length > 0;
+    },
+
+    getChangesForQueue: (queuePath) => {
+      return get().stagedChanges.filter((c) => c.queuePath === queuePath);
+    },
+
+    hasPendingDeletion: (queuePath) => {
+      return get().stagedChanges.some((c) => c.queuePath === queuePath && c.type === 'remove');
+    },
+
+    revertQueueDeletion: (queuePath) => {
+      const removalChange = get().stagedChanges.find(
+        (c) => c.queuePath === queuePath && c.type === 'remove',
+      );
+      if (removalChange) {
+        get().revertChange(removalChange.id);
+      }
+    },
+
+    getStagedChangeById: (changeId) => {
+      return get().stagedChanges.find((c) => c.id === changeId);
+    },
+
+    getLabelChangesForQueue: (queuePath, label) => {
+      return get().stagedChanges.filter((c) => c.queuePath === queuePath && c.label === label);
+    },
+  };
+};

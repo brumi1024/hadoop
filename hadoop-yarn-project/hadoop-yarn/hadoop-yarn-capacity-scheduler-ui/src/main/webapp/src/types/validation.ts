@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Validation types for YARN Capacity Scheduler configuration
  */
@@ -30,10 +29,14 @@ export interface ParsedCapacity {
   rawValue: string;
 }
 
+/**
+ * A server validation issue as displayed by the UI. Issues are attached to fields by their
+ * exact (queuePath, propertyKey) pair; a null queuePath marks a global issue.
+ */
 export interface ValidationIssue {
-  queuePath: string;
-  field: string;
-  message: string;
+  queuePath: string | null;
+  propertyKey: string | null;
+  ruleId: string;
   severity: 'error' | 'warning';
-  rule: string;
+  message: string;
 }

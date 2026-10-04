@@ -16,15 +16,53 @@
  * limitations under the License.
  */
 
-
 import { http, HttpResponse, type HttpHandler } from 'msw';
 import { API_CONFIG } from '~/lib/api/config';
 import { HTTP_AUTH_PROPERTY, READ_ONLY_PROPERTY } from '~/config';
+import { CONFIG_PREFIXES, MUTATION_OPERATIONS, type SchedConfUpdateInfo } from '~/types';
 
 // Base URL pattern that matches the API configuration
 
 const { baseUrl, mockMode } = API_CONFIG;
 const MOCK_ASSET_BASE = `${import.meta.env.BASE_URL}mock/ws/v1/cluster`;
+
+// Mock ETag: changes with every applied mutation, like the RM's content hash.
+let mockConfigGeneration = 1;
+const currentEtag = () => `"mock-${mockConfigGeneration}"`;
+
+/**
+ * Explains the requested queues like validate/v2: `affected` selects the updated and added
+ * queues, and queues staged for removal are left out. Only staged values are reported, as
+ * set on the queue itself.
+ */
+function mockExplain(explainParam: string | null, changes: SchedConfUpdateInfo) {
+  if (!explainParam) {
+    return {};
+  }
+  const staged = [
+    ...(changes[MUTATION_OPERATIONS.UPDATE_QUEUE] ?? []),
+    ...(changes[MUTATION_OPERATIONS.ADD_QUEUE] ?? []),
+  ];
+  const removed = new Set([changes[MUTATION_OPERATIONS.REMOVE_QUEUE] ?? []].flat());
+  const requested =
+    explainParam === 'affected'
+      ? staged.map((queue) => queue['queue-name'])
+      : explainParam.split(',').map((path) => decodeURIComponent(path.trim()));
+  const queue = [...new Set(requested)]
+    .filter((queuePath) => queuePath && !removed.has(queuePath))
+    .map((queuePath) => ({
+      queuePath,
+      property: staged
+        .filter((change) => change['queue-name'] === queuePath)
+        .flatMap((change) => change.params.entry)
+        .map(({ key, value }) => ({
+          key: `${CONFIG_PREFIXES.BASE}.${queuePath}.${key}`,
+          value,
+          source: 'QUEUE',
+        })),
+    }));
+  return { queue };
+}
 
 const staticHandlers: HttpHandler[] = [
   // Scheduler endpoints - serve local mock files
@@ -37,31 +75,42 @@ const staticHandlers: HttpHandler[] = [
   http.get(`${baseUrl}/scheduler-conf`, async () => {
     const response = await fetch(`${MOCK_ASSET_BASE}/scheduler-conf.json`);
     const data = await response.json();
-    return HttpResponse.json(data);
+    return HttpResponse.json(data, { headers: { ETag: currentEtag() } });
   }),
 
   http.put(`${baseUrl}/scheduler-conf`, async ({ request }) => {
     // Simulate processing time
     await new Promise((resolve) => setTimeout(resolve, 500));
 
+    const ifMatch = request.headers.get('If-Match');
+    if (ifMatch && ifMatch !== '*' && ifMatch !== currentEtag()) {
+      return new HttpResponse('Scheduler configuration changed since it was read', {
+        status: 412,
+      });
+    }
+
     const changes = await request.json();
     console.log('Mock: Applying configuration changes:', changes);
+    mockConfigGeneration += 1;
 
-    return HttpResponse.json({
-      response: 'Configuration updated successfully',
+    return new HttpResponse('Configuration change successfully applied.', {
+      headers: { 'Content-Type': 'text/plain', ETag: currentEtag() },
     });
   }),
 
-  http.post(`${baseUrl}/scheduler-conf/validate`, async ({ request }) => {
+  http.post(`${baseUrl}/scheduler-conf/validate/v2`, async ({ request }) => {
     // Simulate processing time
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    const changes = await request.json();
+    const changes = (await request.json()) as SchedConfUpdateInfo;
     console.log('Mock: Validating configuration changes:', changes);
 
-    // Always return success for mock mode
     return HttpResponse.json({
-      validation: 'success',
+      validationResult: {
+        valid: true,
+        issues: {},
+        explain: mockExplain(new URL(request.url).searchParams.get('explain'), changes),
+      },
     });
   }),
 

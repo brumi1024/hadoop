@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect } from 'vitest';
 import { queuePropertyDefinitions } from '~/config/properties/queue-properties';
 import {
@@ -26,13 +25,6 @@ import {
 } from '~/config/properties/helpers';
 import { globalPropertyDefinitions } from '~/config/properties/global-properties';
 import { CONFIG_PREFIXES } from '~/types';
-import {
-  capacityValueSchema,
-  percentageSchema,
-  positiveNumberSchema,
-  integerSchema,
-  aclFormatSchema,
-} from '~/config/schemas/validation';
 import { shouldShowProperty } from '~/utils/propertyConditions';
 
 describe('propertyDefinitions', () => {
@@ -126,15 +118,15 @@ describe('propertyDefinitions', () => {
       });
     });
 
-    it('has validation rules for properties that need them', () => {
-      const capacityProperty = queuePropertyDefinitions.find((p) => p.name === 'capacity');
-      expect(capacityProperty?.validationRules).toBeDefined();
-      expect(capacityProperty?.validationRules?.length).toBeGreaterThan(0);
+    it('declares no client-side validation rules, only input ranges', () => {
+      for (const property of queuePropertyDefinitions) {
+        expect(property).not.toHaveProperty('validationRules');
+      }
 
       const userLimitProperty = queuePropertyDefinitions.find(
         (p) => p.name === 'minimum-user-limit-percent',
       );
-      expect(userLimitProperty?.validationRules).toBeDefined();
+      expect(userLimitProperty?.inputRange).toEqual({ min: 0, max: 100 });
     });
 
     it('has enum values for enum type properties', () => {
@@ -671,7 +663,6 @@ describe('propertyDefinitions', () => {
       expect(accessibleLabelsProperty?.category).toBe('node-labels');
       expect(accessibleLabelsProperty?.required).toBe(false);
       expect(accessibleLabelsProperty?.type).toBe('string');
-      expect(accessibleLabelsProperty?.validationRules).toBeDefined();
 
       const defaultExpressionProperty = queuePropertyDefinitions.find(
         (p) => p.name === 'default-node-label-expression',
@@ -680,29 +671,6 @@ describe('propertyDefinitions', () => {
       expect(defaultExpressionProperty?.category).toBe('node-labels');
       expect(defaultExpressionProperty?.required).toBe(false);
       expect(defaultExpressionProperty?.type).toBe('string');
-    });
-
-    it('validates accessible node labels correctly', () => {
-      const accessibleLabelsProperty = queuePropertyDefinitions.find(
-        (p) => p.name === 'accessible-node-labels',
-      );
-      const validator = accessibleLabelsProperty?.validationRules?.[0]?.validator;
-
-      expect(validator).toBeDefined();
-      if (validator) {
-        // Valid cases
-        expect(validator('')).toBe(true); // Empty for default partition
-        expect(validator('*')).toBe(true); // All labels
-        expect(validator('gpu')).toBe(true); // Single label
-        expect(validator('gpu,cpu')).toBe(true); // Multiple labels
-        expect(validator('gpu, cpu, fpga')).toBe(true); // With spaces
-
-        // Invalid cases
-        expect(validator('gpu,cpu,')).toBe(false); // Trailing comma
-        expect(validator(',gpu')).toBe(false); // Leading comma
-        expect(validator('gpu.cpu')).toBe(false); // Invalid character
-        expect(validator('gpu cpu')).toBe(false); // Space instead of comma
-      }
     });
   });
 
@@ -732,6 +700,23 @@ describe('propertyDefinitions', () => {
             option.value === 'org.apache.hadoop.yarn.util.resource.DominantResourceCalculator',
         ),
       ).toBe(true);
+    });
+
+    it('leaves global semantic validation to the ResourceManager', () => {
+      expect(globalPropertyDefinitions.every((property) => !('validationRules' in property))).toBe(
+        true,
+      );
+    });
+
+    it('keeps numeric input ranges as browser affordances', () => {
+      const maximumApplications = globalPropertyDefinitions.find(
+        (property) => property.name === `${CONFIG_PREFIXES.BASE}.maximum-applications`,
+      );
+
+      expect(maximumApplications?.inputRange).toEqual({
+        min: 0,
+        max: 2147483647,
+      });
     });
   });
 
@@ -775,116 +760,6 @@ describe('propertyDefinitions', () => {
       it('returns undefined for invalid name', () => {
         const invalidProperty = getPropertyDefinition('nonexistent-property');
         expect(invalidProperty).toBeUndefined();
-      });
-    });
-  });
-
-  describe('validation schemas', () => {
-    describe('capacityValueSchema', () => {
-      it('validates percentage values', () => {
-        expect(capacityValueSchema.safeParse('50').success).toBe(true);
-        expect(capacityValueSchema.safeParse('50%').success).toBe(true);
-        expect(capacityValueSchema.safeParse('100').success).toBe(true);
-        expect(capacityValueSchema.safeParse('0').success).toBe(true);
-
-        expect(capacityValueSchema.safeParse('101').success).toBe(false);
-        expect(capacityValueSchema.safeParse('-1').success).toBe(false);
-        expect(capacityValueSchema.safeParse('150%').success).toBe(false);
-      });
-
-      it('validates weight values', () => {
-        expect(capacityValueSchema.safeParse('2w').success).toBe(true);
-        expect(capacityValueSchema.safeParse('10w').success).toBe(true);
-        expect(capacityValueSchema.safeParse('0.5w').success).toBe(true);
-
-        expect(capacityValueSchema.safeParse('0w').success).toBe(false);
-        expect(capacityValueSchema.safeParse('-1w').success).toBe(false);
-        expect(capacityValueSchema.safeParse('w').success).toBe(false);
-      });
-
-      it('validates absolute resource values', () => {
-        expect(capacityValueSchema.safeParse('[memory=1024,vcores=2]').success).toBe(true);
-        expect(capacityValueSchema.safeParse('[memory=2048]').success).toBe(true);
-        expect(capacityValueSchema.safeParse('[vcores=4]').success).toBe(true);
-
-        expect(capacityValueSchema.safeParse('[]').success).toBe(false);
-        expect(capacityValueSchema.safeParse('[memory=]').success).toBe(false);
-        expect(capacityValueSchema.safeParse('[=1024]').success).toBe(false);
-        expect(capacityValueSchema.safeParse('[memory=abc]').success).toBe(false);
-      });
-
-      it('allows empty values', () => {
-        expect(capacityValueSchema.safeParse('').success).toBe(true);
-        expect(capacityValueSchema.safeParse('   ').success).toBe(true);
-      });
-    });
-
-    describe('percentageSchema', () => {
-      it('validates percentage values', () => {
-        expect(percentageSchema.safeParse('0').success).toBe(true);
-        expect(percentageSchema.safeParse('50').success).toBe(true);
-        expect(percentageSchema.safeParse('100').success).toBe(true);
-        expect(percentageSchema.safeParse('25.5').success).toBe(true);
-
-        expect(percentageSchema.safeParse('101').success).toBe(false);
-        expect(percentageSchema.safeParse('-1').success).toBe(false);
-        expect(percentageSchema.safeParse('abc').success).toBe(false);
-      });
-
-      it('allows empty values', () => {
-        expect(percentageSchema.safeParse('').success).toBe(true);
-      });
-    });
-
-    describe('positiveNumberSchema', () => {
-      it('validates positive numbers', () => {
-        expect(positiveNumberSchema.safeParse('1').success).toBe(true);
-        expect(positiveNumberSchema.safeParse('0.1').success).toBe(true);
-        expect(positiveNumberSchema.safeParse('100').success).toBe(true);
-
-        expect(positiveNumberSchema.safeParse('0').success).toBe(false);
-        expect(positiveNumberSchema.safeParse('-1').success).toBe(false);
-        expect(positiveNumberSchema.safeParse('abc').success).toBe(false);
-      });
-
-      it('allows empty values', () => {
-        expect(positiveNumberSchema.safeParse('').success).toBe(true);
-      });
-    });
-
-    describe('integerSchema', () => {
-      it('validates positive integers', () => {
-        expect(integerSchema.safeParse('1').success).toBe(true);
-        expect(integerSchema.safeParse('100').success).toBe(true);
-        expect(integerSchema.safeParse('1000').success).toBe(true);
-
-        expect(integerSchema.safeParse('0').success).toBe(false);
-        expect(integerSchema.safeParse('-1').success).toBe(false);
-        expect(integerSchema.safeParse('1.5').success).toBe(false);
-        expect(integerSchema.safeParse('abc').success).toBe(false);
-      });
-
-      it('allows empty values', () => {
-        expect(integerSchema.safeParse('').success).toBe(true);
-      });
-    });
-
-    describe('aclFormatSchema', () => {
-      it('validates ACL format', () => {
-        expect(aclFormatSchema.safeParse('*').success).toBe(true);
-        expect(aclFormatSchema.safeParse(' ').success).toBe(true);
-        expect(aclFormatSchema.safeParse('user1,user2 group1,group2').success).toBe(true);
-        expect(aclFormatSchema.safeParse('user1 group1').success).toBe(true);
-        expect(aclFormatSchema.safeParse('user1').success).toBe(true);
-        expect(aclFormatSchema.safeParse('user1,user2').success).toBe(true);
-
-        expect(aclFormatSchema.safeParse('user1 group1 extra').success).toBe(false);
-        expect(aclFormatSchema.safeParse('user@domain').success).toBe(false);
-        expect(aclFormatSchema.safeParse('user with spaces').success).toBe(false);
-      });
-
-      it('allows empty values', () => {
-        expect(aclFormatSchema.safeParse('').success).toBe(true);
       });
     });
   });

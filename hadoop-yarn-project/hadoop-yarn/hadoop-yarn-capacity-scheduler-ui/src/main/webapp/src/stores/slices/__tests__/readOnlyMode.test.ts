@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createSchedulerStore } from '~/stores/schedulerStore';
 import type { YarnApiClient } from '~/lib/api/YarnApiClient';
@@ -31,7 +30,7 @@ const createMockApiClient = (isReadOnly: boolean) => ({
   getNodeToLabels: vi.fn(),
   getSchedulerConfVersion: vi.fn(),
   updateSchedulerConf: vi.fn(),
-  validateSchedulerConf: vi.fn(),
+  validateSchedulerConf: vi.fn().mockResolvedValue({ valid: true, issues: [], explain: [] }),
   addNodeLabels: vi.fn(),
   removeNodeLabels: vi.fn(),
   replaceNodeToLabels: vi.fn(),
@@ -120,10 +119,9 @@ describe('Read-Only Mode', () => {
       expect(store.getState().stagedChanges).toHaveLength(1);
 
       // Mock successful validation and update
-      vi.mocked(store.getState().apiClient.validateSchedulerConf).mockResolvedValue({
-        validation: 'success',
+      vi.mocked(store.getState().apiClient.updateSchedulerConf).mockResolvedValue({
+        etag: null,
       });
-      vi.mocked(store.getState().apiClient.updateSchedulerConf).mockResolvedValue(undefined);
 
       // Should not throw
       await expect(store.getState().applyChanges()).resolves.not.toThrow();

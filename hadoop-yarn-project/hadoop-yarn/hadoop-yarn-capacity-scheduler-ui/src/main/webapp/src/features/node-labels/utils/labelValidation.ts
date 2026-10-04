@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Node label validation utilities according to YARN Capacity Scheduler specification
  *
@@ -87,13 +86,11 @@ export function validateLabelName(labelName: string, existingLabels?: string[]):
  * Validates if a label name is safe to remove
  * @param labelName The label name to check
  * @param nodeAssignments Map of nodeId -> assigned labels to check if label is in use
- * @param queueConfigurations Map of queuePath -> accessible labels to check if queues use this label
  * @returns Validation result with error if label cannot be removed
  */
 export function validateLabelRemoval(
   labelName: string,
   nodeAssignments: Map<string, string[]>,
-  queueConfigurations?: Map<string, string[]>,
 ): ValidationResult {
   // Check if any nodes are assigned to this label
   const nodesWithLabel = Array.from(nodeAssignments.entries())
@@ -105,20 +102,6 @@ export function validateLabelRemoval(
       valid: false,
       error: `Cannot remove label "${labelName}": ${nodesWithLabel.length} node(s) are assigned to this label. Reassign nodes first.`,
     };
-  }
-
-  // Check if any queues are configured to use this label
-  if (queueConfigurations) {
-    const queuesWithLabel = Array.from(queueConfigurations.entries())
-      .filter(([_, labels]) => labels.includes(labelName))
-      .map(([queuePath]) => queuePath);
-
-    if (queuesWithLabel.length > 0) {
-      return {
-        valid: false,
-        error: `Cannot remove label "${labelName}": ${queuesWithLabel.length} queue(s) are configured to use this label. Update queue configurations first.`,
-      };
-    }
   }
 
   return { valid: true };

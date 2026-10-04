@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { useEffect } from 'react';
 import { useForm, type SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -306,6 +305,7 @@ export function PlacementRuleForm({ rule, ruleIndex, onSubmit, onCancel }: Place
                     <FieldControl>
                       <Input
                         {...field}
+                        value={field.value ?? ''}
                         placeholder="e.g., root.%primary_group.%user"
                         aria-invalid={Boolean(fieldState.error)}
                       />

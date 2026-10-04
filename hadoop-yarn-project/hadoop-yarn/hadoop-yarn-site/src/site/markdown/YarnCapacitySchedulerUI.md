@@ -83,3 +83,30 @@ Notes
   adding/removing node labels, replacing node-to-label mappings) are blocked
   on the client side.
 * This UI framework is verified under security environment as well.
+
+
+Validation and concurrent changes
+---------------------------------
+
+The UI has no validation rules of its own.
+Staged changes are validated by the ResourceManager through `POST /ws/v1/cluster/scheduler-conf/validate/v2`.
+Validation runs shortly after every staged edit, and after the configuration is reloaded, whether or not the staged changes panel is open.
+A result that arrives after the staged changes were edited again is discarded.
+The proposal is validated as Apply will submit it, including the queues Apply stops first, such as the parent of a new child queue or a queue being removed.
+Validation runs the same way whether or not legacy queue mode is enabled.
+
+Issues are shown where they belong: on the property field and staged change with the same queue path and configuration key, on the queue in the tree, and in the staged changes panel.
+Issues without a queue path, and issues for a key that is not being edited, are listed in the staged changes panel.
+Errors block Apply; warnings do not, and the warnings of the last applied proposal stay visible until the next edit.
+If the validation request itself fails, for example because the caller is not an administrator, the panel reports that validation is unavailable.
+
+Queue property fields show where a value that the queue does not set comes from: a parent queue, a global setting, an auto-creation template, the scheduler default or a derived value.
+This information comes from the `explain` section of the validation response.
+
+Apply validates the proposal once more and then sends `PUT /ws/v1/cluster/scheduler-conf` with an `If-Match` header carrying the `ETag` of the last configuration read.
+If the configuration was changed by someone else in the meantime, the ResourceManager answers `412 Precondition Failed` and nothing is applied.
+The staged changes are kept, and the panel offers to reload the configuration and compare: values that changed under a staged edit are marked so they can be reviewed before applying again.
+A write whose outcome is unknown, for example after a network error, is never retried automatically; reload the configuration to see whether it was applied.
+
+The `ETag` is only readable when the UI is served by the ResourceManager itself.
+Cross-origin setups do not expose the header, and the Router does not return it, so writes made through them are not guarded by `If-Match`.

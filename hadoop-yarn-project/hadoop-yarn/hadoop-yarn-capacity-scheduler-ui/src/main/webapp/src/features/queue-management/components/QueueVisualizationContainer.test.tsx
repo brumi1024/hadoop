@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
@@ -113,6 +112,9 @@ function createSchedulerStoreState() {
     comparisonQueues: [] as string[],
     toggleComparisonQueue: vi.fn(),
     stagedChanges: [] as unknown[],
+    serverIssues: [],
+    appliedWarnings: [],
+    explain: {},
     setPropertyPanelOpen: vi.fn(),
     isPropertyPanelOpen: false,
     propertyPanelInitialTab: 'overview' as const,
@@ -163,7 +165,6 @@ function createSchedulerStoreState() {
       draftOrder: [],
       isSaving: false,
       saveError: null,
-      validationIssues: [],
     },
     closeCapacityEditor: vi.fn(),
     updateCapacityDraft: vi.fn(),
@@ -357,6 +358,9 @@ describe('QueueVisualizationContainer', () => {
         comparisonQueues: [],
         toggleComparisonQueue: vi.fn(),
         stagedChanges: [],
+        serverIssues: [],
+        appliedWarnings: [],
+        explain: {},
         setPropertyPanelOpen: mockSetPropertyPanelOpen,
         propertyPanelInitialTab: 'overview' as const,
         setPropertyPanelInitialTab: vi.fn(),
@@ -406,7 +410,6 @@ describe('QueueVisualizationContainer', () => {
           draftOrder: [],
           isSaving: false,
           saveError: null,
-          validationIssues: [],
         },
         closeCapacityEditor: vi.fn(),
         updateCapacityDraft: vi.fn(),

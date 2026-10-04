@@ -16,12 +16,27 @@
  * limitations under the License.
  */
 
-
 import React, { useReducer, useState, useEffect, useRef } from 'react';
-import { Save, RotateCcw, GitBranch, Info, Settings, Edit, AlertTriangle, Undo2, Trash2 } from 'lucide-react';
+import {
+  Save,
+  RotateCcw,
+  GitBranch,
+  Info,
+  Settings,
+  Edit,
+  AlertTriangle,
+  Undo2,
+  Trash2,
+} from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useSchedulerStore } from '~/stores/schedulerStore';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '~/components/ui/sheet';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '~/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '~/components/ui/tabs';
 import { Button } from '~/components/ui/button';
 import { Badge } from '~/components/ui/badge';
@@ -32,7 +47,7 @@ import { UnsavedChangesDialog } from './dialogs/UnsavedChangesDialog';
 import { ValidationIssuesPopover } from './ValidationIssuesPopover';
 import type { PropertyEditorTabHandle } from './PropertyEditorTab';
 import { toast } from 'sonner';
-import { useValidation } from '~/contexts/ValidationContext';
+import { getIssuePropertyName, getQueueIssues } from '~/features/validation/service';
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert';
 import { cn } from '~/utils/cn';
 import { TemplateConfigDialog } from '~/features/template-config/components/TemplateConfigDialog';
@@ -122,7 +137,7 @@ export const PropertyPanel: React.FC = () => {
   const [isTemplateDialogOpen, setIsTemplateDialogOpen] = useState(false);
 
   const propertyEditorRef = useRef<PropertyEditorTabHandle>(null);
-  const { errors: validationState } = useValidation();
+  const serverIssues = useSchedulerStore((s) => s.serverIssues);
 
   const selectedQueue = selectedQueuePath ? getQueueByPath(selectedQueuePath) : null;
   const isPanelVisible = Boolean(selectedQueue && isPropertyPanelOpen);
@@ -133,36 +148,36 @@ export const PropertyPanel: React.FC = () => {
 
   const hasLegacyStagedEnable = Boolean(
     selectedQueuePath &&
-      stagedChanges?.some(
-        (change) =>
-          change.queuePath === selectedQueuePath &&
-          change.property === AUTO_CREATION_PROPS.LEGACY_ENABLED &&
-          change.newValue === 'true',
-      ),
+    stagedChanges?.some(
+      (change) =>
+        change.queuePath === selectedQueuePath &&
+        change.property === AUTO_CREATION_PROPS.LEGACY_ENABLED &&
+        change.newValue === 'true',
+    ),
   );
 
   const hasFlexibleStagedEnable = Boolean(
     selectedQueuePath &&
-      stagedChanges?.some(
-        (change) =>
-          change.queuePath === selectedQueuePath &&
-          change.property === AUTO_CREATION_PROPS.FLEXIBLE_ENABLED &&
-          change.newValue === 'true',
-      ),
+    stagedChanges?.some(
+      (change) =>
+        change.queuePath === selectedQueuePath &&
+        change.property === AUTO_CREATION_PROPS.FLEXIBLE_ENABLED &&
+        change.newValue === 'true',
+    ),
   );
 
   const legacyTemplateAvailable = Boolean(
     selectedQueuePath &&
-      (getQueuePropertyValue(selectedQueuePath, AUTO_CREATION_PROPS.LEGACY_ENABLED).value ===
-        'true' ||
-        hasLegacyStagedEnable),
+    (getQueuePropertyValue(selectedQueuePath, AUTO_CREATION_PROPS.LEGACY_ENABLED).value ===
+      'true' ||
+      hasLegacyStagedEnable),
   );
 
   const flexibleTemplateAvailable = Boolean(
     selectedQueuePath &&
-      (getQueuePropertyValue(selectedQueuePath, AUTO_CREATION_PROPS.FLEXIBLE_ENABLED).value ===
-        'true' ||
-        hasFlexibleStagedEnable),
+    (getQueuePropertyValue(selectedQueuePath, AUTO_CREATION_PROPS.FLEXIBLE_ENABLED).value ===
+      'true' ||
+      hasFlexibleStagedEnable),
   );
 
   const showTemplateButton = Boolean(
@@ -289,17 +304,14 @@ export const PropertyPanel: React.FC = () => {
 
   const queuePath = selectedQueue?.queuePath;
 
-  const queueIssues = !queuePath ? {} : (validationState[queuePath] ?? {});
-
+  // Issues without a property of this queue are listed under the queue itself.
   const issueList = !queuePath
     ? []
-    : Object.entries(queueIssues).flatMap(([field, issues]) =>
-        issues.map((issue, index) => ({
-          ...issue,
-          field,
-          key: `${field}-${issue.rule}-${index}`,
-        })),
-      );
+    : getQueueIssues(serverIssues, queuePath).map((issue, index) => ({
+        ...issue,
+        field: getIssuePropertyName(issue) ?? issue.propertyKey ?? 'queue',
+        key: `${issue.propertyKey ?? 'queue'}-${issue.ruleId}-${index}`,
+      }));
 
   const handleIssueSelect = (field: string) => {
     const selector = `[data-field-id="${field.replace(/"/g, '\\"')}"]`;
@@ -359,6 +371,9 @@ export const PropertyPanel: React.FC = () => {
                 <SheetTitle className="text-base font-semibold">
                   Queue: {selectedQueue.queueName}
                 </SheetTitle>
+                <SheetDescription className="sr-only">
+                  Inspect queue details and stage scheduler configuration changes.
+                </SheetDescription>
               </div>
               {/* Status bar */}
               <div className="mt-2 border-b">

@@ -26,6 +26,7 @@ import type {
   ApiClientConfig,
   SchedulerResponse,
   SchedulerConfResponse,
+  SchedulerConfWriteResult,
   SchedConfUpdateInfo,
   YarnErrorResponse,
   NodeLabelsResponse,
@@ -33,9 +34,15 @@ import type {
   NodesResponse,
   VersionResponse,
   YarnConfigResponse,
+  ExplainRequest,
+  ExplainedProperty,
+  QueueExplain,
+  SchedulerValidationIssue,
   ValidationResponse,
+  ValueSource,
 } from '~/types';
 import { HTTP_AUTH_PROPERTY, READ_ONLY_PROPERTY } from '~/config';
+import { YarnApiError } from '~/lib/errors/api-error';
 
 export class YarnApiClient {
   private readonly baseUrl: string;
@@ -98,35 +105,79 @@ export class YarnApiClient {
   }
 
   /**
-   * GET /scheduler-conf - Fetch current configuration properties
+   * GET /scheduler-conf - Fetch current configuration properties and the ETag that
+   * identifies them
    */
   async getSchedulerConf(): Promise<SchedulerConfResponse> {
-    return this.request<SchedulerConfResponse>('GET', '/scheduler-conf');
-  }
-
-  /**
-   * PUT /scheduler-conf - Update configuration
-   */
-  async updateSchedulerConf(updateInfo: SchedConfUpdateInfo): Promise<void> {
-    await this.request('PUT', '/scheduler-conf', {
-      body: JSON.stringify(updateInfo),
-      headers: {
-        'Content-Type': 'application/json',
+    return this.request<SchedulerConfResponse>('GET', '/scheduler-conf', {
+      readResponse: async (response) => {
+        const config = (await response.json()) as SchedulerConfResponse;
+        return { ...config, etag: response.headers.get('ETag') };
       },
-      expectJson: false,
     });
   }
 
   /**
-   * POST /scheduler-conf/validate - Validate configuration changes
+   * PUT /scheduler-conf - Update configuration.
+   *
+   * With ifMatch the server rejects the write with 412 when the configuration no longer
+   * matches that ETag. A successful write returns the ETag of the configuration it
+   * committed, which the next write of a multi-step update sends as its ifMatch; it is null
+   * when the server does not send one. A submitted write is never retried here: if the
+   * outcome is unknown (network failure, timeout) the caller must reload and compare.
    */
-  async validateSchedulerConf(updateInfo: SchedConfUpdateInfo): Promise<ValidationResponse> {
-    return this.request<ValidationResponse>('POST', '/scheduler-conf/validate', {
+  async updateSchedulerConf(
+    updateInfo: SchedConfUpdateInfo,
+    options: { ifMatch?: string | null } = {},
+  ): Promise<SchedulerConfWriteResult> {
+    return this.request<SchedulerConfWriteResult>('PUT', '/scheduler-conf', {
+      body: JSON.stringify(updateInfo),
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.ifMatch ? { 'If-Match': options.ifMatch } : {}),
+      },
+      readResponse: async (response) => ({ etag: response.headers.get('ETag') }),
+    });
+  }
+
+  /**
+   * POST /scheduler-conf/validate/v2 - Validate a proposed mutation without applying it.
+   *
+   * Every 200 response is a validation result, valid or not. Any other status is an error,
+   * including a 400 RemoteException for a body the server cannot interpret.
+   */
+  async validateSchedulerConf(
+    updateInfo: SchedConfUpdateInfo,
+    options: { explain?: ExplainRequest } = {},
+  ): Promise<ValidationResponse> {
+    const explain = formatExplainParameter(options.explain);
+    const path = explain
+      ? `/scheduler-conf/validate/v2?explain=${explain}`
+      : '/scheduler-conf/validate/v2';
+    const body = await this.request<unknown>('POST', path, {
       body: JSON.stringify(updateInfo),
       headers: {
         'Content-Type': 'application/json',
       },
+      readResponse: async (response) => {
+        const text = await response.text();
+        try {
+          return JSON.parse(text) as unknown;
+        } catch {
+          return text;
+        }
+      },
     });
+
+    const normalized = normalizeValidationResponse(body);
+    if (!normalized) {
+      throw new YarnApiError(
+        'Unexpected response from scheduler configuration validation',
+        200,
+        'invalid-response',
+      );
+    }
+    return normalized;
   }
 
   /**
@@ -294,7 +345,11 @@ export class YarnApiClient {
   private async request<T = void>(
     method: string,
     path: string,
-    options: RequestInit & { skipAuth?: boolean; expectJson?: boolean } = {},
+    options: RequestInit & {
+      skipAuth?: boolean;
+      expectJson?: boolean;
+      readResponse?: (response: Response) => Promise<unknown>;
+    } = {},
   ): Promise<T> {
     // Lazy initialization: Start detection on first request (ensures MSW is ready)
     if (this.initPromise === null && this.securityMode === null) {
@@ -321,7 +376,7 @@ export class YarnApiClient {
     }
 
     // Build URL by appending path to baseUrl
-    const { skipAuth, expectJson = true, ...fetchOptions } = options;
+    const { skipAuth, expectJson = true, readResponse, ...fetchOptions } = options;
     let url = `${this.baseUrl}${path}`;
 
     // Add user.name parameter for simple auth mode (unless skipAuth is true)
@@ -347,6 +402,10 @@ export class YarnApiClient {
 
       if (!response.ok) {
         await this.handleErrorResponse(response);
+      }
+
+      if (readResponse) {
+        return (await readResponse(response)) as T;
       }
 
       // Handle empty responses
@@ -377,10 +436,11 @@ export class YarnApiClient {
   }
 
   /**
-   * Handle error responses from YARN API
+   * Turn a non-success response into a typed YarnApiError
    */
   private async handleErrorResponse(response: Response): Promise<never> {
     let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+    let exception: string | undefined;
 
     try {
       const rawBody = await response.text();
@@ -392,6 +452,7 @@ export class YarnApiClient {
 
           if ('RemoteException' in parsed && parsed.RemoteException?.message) {
             errorMessage = parsed.RemoteException.message;
+            exception = parsed.RemoteException.exception || 'RemoteException';
           } else if (Array.isArray((parsed as { errors?: string[] }).errors)) {
             const combined = (parsed as { errors: string[] }).errors.join('; ');
             if (combined.trim().length > 0) {
@@ -415,6 +476,119 @@ export class YarnApiClient {
       // Swallow secondary parsing errors and fall back to default message
     }
 
-    throw new Error(errorMessage);
+    if (response.status === 412) {
+      throw new YarnApiError(errorMessage, response.status, 'precondition-failed', exception);
+    }
+    throw new YarnApiError(
+      errorMessage,
+      response.status,
+      exception ? 'remote-exception' : 'http',
+      exception,
+    );
   }
+}
+
+function formatExplainParameter(explain: ExplainRequest | undefined): string | null {
+  if (!explain) {
+    return null;
+  }
+  if (explain === 'affected') {
+    return 'affected';
+  }
+  const paths = explain.filter((path) => path.length > 0);
+  return paths.length > 0 ? paths.map(encodeURIComponent).join(',') : null;
+}
+
+// Jersey's JSON rendering may collapse a one-element list into a bare object and omit an
+// empty one, so every list in the validation result is read through this helper.
+function asList(value: unknown): unknown[] {
+  if (value === undefined || value === null || value === '') {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+const VALUE_SOURCES: readonly ValueSource[] = [
+  'QUEUE',
+  'TEMPLATE_V2',
+  'TEMPLATE_V1',
+  'PARENT',
+  'GLOBAL',
+  'DEFAULT',
+  'DERIVED',
+];
+
+function normalizeIssue(value: unknown): SchedulerValidationIssue | null {
+  if (!isRecord(value) || typeof value.message !== 'string') {
+    return null;
+  }
+  const severity = value.severity === 'WARNING' ? 'WARNING' : 'ERROR';
+  return {
+    queuePath: optionalString(value.queuePath),
+    propertyKey: optionalString(value.propertyKey),
+    ruleId: typeof value.ruleId === 'string' ? value.ruleId : '',
+    severity,
+    message: value.message,
+  };
+}
+
+function normalizeExplainedProperty(value: unknown): ExplainedProperty | null {
+  if (!isRecord(value) || typeof value.key !== 'string') {
+    return null;
+  }
+  const source = VALUE_SOURCES.find((candidate) => candidate === value.source);
+  if (!source) {
+    return null;
+  }
+  return {
+    key: value.key,
+    value: typeof value.value === 'string' ? value.value : null,
+    source,
+    sourceDetail: optionalString(value.sourceDetail),
+  };
+}
+
+function normalizeQueueExplain(value: unknown): QueueExplain | null {
+  if (!isRecord(value) || typeof value.queuePath !== 'string') {
+    return null;
+  }
+  return {
+    queuePath: value.queuePath,
+    properties: asList(value.property)
+      .map(normalizeExplainedProperty)
+      .filter((property): property is ExplainedProperty => property !== null),
+  };
+}
+
+/**
+ * Read a validate/v2 body. Returns null when the body is not a validation result, so a
+ * RemoteException or any other shape is never mistaken for an accepted proposal.
+ */
+export function normalizeValidationResponse(body: unknown): ValidationResponse | null {
+  if (!isRecord(body) || !isRecord(body.validationResult)) {
+    return null;
+  }
+  const result = body.validationResult;
+  if (typeof result.valid !== 'boolean') {
+    return null;
+  }
+  const issues = isRecord(result.issues) ? asList(result.issues.issue) : asList(result.issues);
+  const explain = isRecord(result.explain) ? asList(result.explain.queue) : [];
+  return {
+    valid: result.valid,
+    issues: issues
+      .map(normalizeIssue)
+      .filter((issue): issue is SchedulerValidationIssue => issue !== null),
+    explain: explain
+      .map(normalizeQueueExplain)
+      .filter((queue): queue is QueueExplain => queue !== null),
+  };
 }

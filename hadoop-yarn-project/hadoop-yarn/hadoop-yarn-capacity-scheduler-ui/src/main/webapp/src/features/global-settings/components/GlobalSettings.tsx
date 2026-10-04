@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useSchedulerStore } from '~/stores/schedulerStore';
@@ -35,7 +34,6 @@ import { AlertCircle } from 'lucide-react';
 import { PropertyInput } from './PropertyInput';
 import { LegacyModeToggle } from './LegacyModeToggle';
 import { shouldShowProperty, isPropertyEnabled } from '~/utils/propertyConditions';
-import { useGlobalPropertyValidation } from '~/features/global-settings/hooks/useGlobalPropertyValidation';
 import {
   categoryConfig,
   globalCategoryOrder,
@@ -58,7 +56,6 @@ export const GlobalSettings: React.FC = () => {
   const getQueuePropertyValue = useSchedulerStore((s) => s.getQueuePropertyValue);
   const stageGlobalChange = useSchedulerStore((s) => s.stageGlobalChange);
   const getFilteredSettings = useSchedulerStore((s) => s.getFilteredSettings);
-  const { validateGlobalProperty } = useGlobalPropertyValidation();
 
   // Use filtered settings if search is active
   const requestedPropertyDefinitions = searchQuery
@@ -171,8 +168,7 @@ export const GlobalSettings: React.FC = () => {
   );
 
   const handlePropertyChange = (propertyKey: string, value: string) => {
-    const validationErrors = validateGlobalProperty(propertyKey, value);
-    stageGlobalChange(propertyKey, value, validationErrors);
+    stageGlobalChange(propertyKey, value);
   };
 
   return (
