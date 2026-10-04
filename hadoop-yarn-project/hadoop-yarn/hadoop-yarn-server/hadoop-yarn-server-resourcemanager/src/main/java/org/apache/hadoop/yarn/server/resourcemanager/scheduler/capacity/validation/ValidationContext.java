@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
@@ -56,23 +57,43 @@ public final class ValidationContext {
   private final Resource clusterMaximumAllocation;
   private final RuntimeException clusterMaximumAllocationFailure;
   private final RuntimeException clusterMaximumPriorityFailure;
+  private final ResolutionInputs inputs;
   private final ResolvedQueueTree tree;
   private final Map<QueuePath, Integer> positions = new HashMap<>();
   private final Map<QueuePath, Integer> subtreeEnds = new HashMap<>();
+  private Map<String, Set<String>> configuredNodeLabelsByQueue;
+  private RuntimeException configuredNodeLabelsFailure;
 
   public ValidationContext(ConfigSnapshot proposed, ClusterFacts facts) {
+    this(proposed, facts, null);
+  }
+
+  /**
+   * @param proposed the snapshot of the proposed configuration
+   * @param facts the live cluster facts
+   * @param source the configuration {@code proposed} is the snapshot of, not
+   *               written into since, or null; when given, the rules read a
+   *               copy of it instead of a configuration rebuilt from the
+   *               snapshot, which holds the same properties
+   */
+  public ValidationContext(ConfigSnapshot proposed, ClusterFacts facts,
+      Configuration source) {
     this.proposed = Objects.requireNonNull(proposed, "proposed");
     this.facts = Objects.requireNonNull(facts, "facts");
 
-    Configuration conf = new Configuration(false);
-    for (String key : proposed.keys()) {
-      conf.set(key, proposed.getRaw(key));
+    Configuration conf;
+    if (source != null) {
+      conf = source;
+    } else {
+      conf = new Configuration(false);
+      for (String key : proposed.keys()) {
+        conf.set(key, proposed.getRaw(key));
+      }
     }
     this.configuration = new CapacitySchedulerConfiguration(conf, false);
     this.legacyQueueMode = configuration.isLegacyQueueMode();
 
-    ResolutionInputs inputs =
-        ResolutionInputs.from(configuration, dynamicQueues(facts));
+    this.inputs = ResolutionInputs.from(configuration, dynamicQueues(facts));
     this.clusterMaximumAllocationFailure =
         inputs.getClusterMaximumAllocationFailure();
     this.clusterMaximumAllocation = clusterMaximumAllocationFailure == null
@@ -146,6 +167,33 @@ public final class ValidationContext {
 
   public boolean isLegacyQueueMode() {
     return legacyQueueMode;
+  }
+
+  /**
+   * Returns {@link QueueConfigResolver#configuredNodeLabelsByQueue} of the
+   * proposed configuration, indexed once per validation.
+   * @return queue path to its configured labels; not to be modified
+   * @throws RuntimeException what indexing the labels threw
+   */
+  public Map<String, Set<String>> getConfiguredNodeLabelsByQueue() {
+    if (configuredNodeLabelsFailure != null) {
+      throw configuredNodeLabelsFailure;
+    }
+    if (configuredNodeLabelsByQueue == null) {
+      try {
+        configuredNodeLabelsByQueue =
+            QueueConfigResolver.configuredNodeLabelsByQueue(proposed);
+      } catch (RuntimeException e) {
+        configuredNodeLabelsFailure = e;
+        throw e;
+      }
+    }
+    return configuredNodeLabelsByQueue;
+  }
+
+  /** @return the inputs the tree was resolved with */
+  public ResolutionInputs getInputs() {
+    return inputs;
   }
 
   /** @return the resolved queue tree of the proposed configuration */

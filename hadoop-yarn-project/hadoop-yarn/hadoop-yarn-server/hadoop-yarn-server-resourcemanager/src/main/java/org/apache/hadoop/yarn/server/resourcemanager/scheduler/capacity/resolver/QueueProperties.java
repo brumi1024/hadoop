@@ -712,7 +712,10 @@ public final class QueueProperties {
    * @return true if it matches {@code RESOURCE_PATTERN}
    */
   public static boolean isAbsoluteResource(String value) {
-    return value != null && RESOURCE_PATTERN.matcher(value).find();
+    // The pattern is anchored at a leading "[", checked first since most
+    // values are percentages or weights
+    return value != null && !value.isEmpty() && value.charAt(0) == '['
+        && RESOURCE_PATTERN.matcher(value).find();
   }
 
   private static boolean isWeight(String value) {

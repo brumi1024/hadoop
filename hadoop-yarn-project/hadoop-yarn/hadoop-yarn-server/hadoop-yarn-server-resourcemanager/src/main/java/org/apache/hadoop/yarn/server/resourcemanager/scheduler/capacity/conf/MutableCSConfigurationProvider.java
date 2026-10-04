@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf;
 
+import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,6 +29,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ConfigurationMutationACLPolicy;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ConfigurationMutationACLPolicyFactory;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfigurationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.YarnConfigurationStore.LogMutation;
 import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
@@ -80,7 +82,7 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
     }
     // After initializing confStore, the store may already have an existing
     // configuration. Use this one.
-    schedConf = confStore.retrieve();
+    schedConf = retrieveFromStore();
     this.aclMutationPolicy = ConfigurationMutationACLPolicyFactory
         .getPolicy(config);
     aclMutationPolicy.init(config, rmContext);
@@ -99,7 +101,21 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   @Override
   public CapacitySchedulerConfiguration loadConfiguration(Configuration
       configuration) throws IOException {
-    Configuration loadedConf = new Configuration(schedConf);
+    return mergeConfiguration(schedConf, configuration);
+  }
+
+  /**
+   * Merges a scheduler configuration the way {@link #loadConfiguration}
+   * merges the current one: its values win over {@code configuration}.
+   *
+   * @param schedulerConf a scheduler configuration
+   * @param configuration the configuration it is overlaid on
+   * @return the merged configuration
+   */
+  @InterfaceAudience.Private
+  public static CapacitySchedulerConfiguration mergeConfiguration(
+      Configuration schedulerConf, Configuration configuration) {
+    Configuration loadedConf = new Configuration(schedulerConf);
     loadedConf.addResource(configuration);
     return new CapacitySchedulerConfiguration(loadedConf, false);
   }
@@ -122,6 +138,7 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   @Override
   public LogMutation logAndApplyMutation(UserGroupInformation user,
       SchedConfUpdateInfo confUpdate) throws Exception {
+    checkWriteLockNotHeld("Logging a configuration mutation");
     oldConf = new Configuration(schedConf);
     CapacitySchedulerConfiguration proposedConf =
             new CapacitySchedulerConfiguration(schedConf, false);
@@ -157,6 +174,7 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   @Override
   public void formatConfigurationInStore(Configuration config)
       throws Exception {
+    checkWriteLockNotHeld("Formatting the configuration store");
     formatLock.writeLock().lock();
     try {
       confStore.format();
@@ -184,6 +202,7 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
 
   @Override
   public void revertToOldConfig(Configuration config) throws Exception {
+    checkWriteLockNotHeld("Reverting the configuration store");
     formatLock.writeLock().lock();
     try {
       schedConf = oldConf;
@@ -200,6 +219,7 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
   @Override
   public void confirmPendingMutation(LogMutation pendingMutation,
       boolean isValid) throws Exception {
+    checkWriteLockNotHeld("Confirming a configuration mutation");
     formatLock.readLock().lock();
     try {
       confStore.confirmMutation(pendingMutation, isValid);
@@ -213,11 +233,26 @@ public class MutableCSConfigurationProvider implements CSConfigurationProvider,
 
   @Override
   public void reloadConfigurationFromStore() throws Exception {
+    checkWriteLockNotHeld("Reloading the configuration store");
     formatLock.readLock().lock();
     try {
-      schedConf = confStore.retrieve();
+      schedConf = retrieveFromStore();
     } finally {
       formatLock.readLock().unlock();
     }
+  }
+
+  /**
+   * A copy of the stored configuration. Some stores return the object they
+   * change in place when a mutation is logged, also when writing it fails.
+   */
+  private Configuration retrieveFromStore() throws IOException {
+    Configuration stored = confStore.retrieve();
+    return stored == null ? null : new Configuration(stored);
+  }
+
+  private void checkWriteLockNotHeld(String operation) {
+    CapacityScheduler.checkWriteLockNotHeld(
+        rmContext == null ? null : rmContext.getScheduler(), operation);
   }
 }

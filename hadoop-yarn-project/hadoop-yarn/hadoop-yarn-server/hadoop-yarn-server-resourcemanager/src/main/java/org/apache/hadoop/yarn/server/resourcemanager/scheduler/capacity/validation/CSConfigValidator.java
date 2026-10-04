@@ -88,7 +88,22 @@ public final class CSConfigValidator {
    */
   public ValidationResult validate(ConfigSnapshot proposed,
       ClusterFacts facts, Collection<String> explainQueuePaths) {
-    ValidationContext context = new ValidationContext(proposed, facts);
+    return validate(new ValidationContext(proposed, facts), explainQueuePaths);
+  }
+
+  /**
+   * Validates with a context the caller created, for example to keep the
+   * resolved queue tree of the proposed configuration.
+   *
+   * @param context the proposed configuration and the live cluster facts
+   * @return the issues found, without explain
+   */
+  public ValidationResult validate(ValidationContext context) {
+    return validate(context, null);
+  }
+
+  private ValidationResult validate(ValidationContext context,
+      Collection<String> explainQueuePaths) {
     List<ValidationIssue> found = new ArrayList<>();
     for (ValidationRule rule : RULES) {
       try {

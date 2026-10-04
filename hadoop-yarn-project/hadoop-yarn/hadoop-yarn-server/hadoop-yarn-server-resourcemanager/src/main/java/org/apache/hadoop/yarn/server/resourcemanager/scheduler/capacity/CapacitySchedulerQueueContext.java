@@ -81,18 +81,41 @@ public class CapacitySchedulerQueueContext {
   }
 
   public void reinitialize() {
-    // When csConfProvider.loadConfiguration is called, the useLocalConfigurationProvider is
-    // correctly set to load the config entries from the capacity-scheduler.xml.
-    // For this reason there is no need to reload from it again.
-    installConfiguration(new CapacitySchedulerConfiguration(csContext.getConfiguration(), false));
+    reinitialize(null);
+  }
+
+  /**
+   * Installs the configuration of the scheduler. When the scheduler
+   * configuration is the one {@code prepared} was prepared from, the
+   * prepared copy is installed, and its resolved queue tree is used if it
+   * was resolved with the inputs installing it resolves with.
+   * @param prepared a configuration validated before activation, or null
+   */
+  void reinitialize(PreparedConfiguration prepared) {
+    CapacitySchedulerConfiguration current = csContext.getConfiguration();
+    if (prepared != null && prepared.source == current) {
+      installConfiguration(prepared.configuration, prepared.resolvedQueueTree);
+    } else {
+      // When csConfProvider.loadConfiguration is called, the useLocalConfigurationProvider is
+      // correctly set to load the config entries from the capacity-scheduler.xml.
+      // For this reason there is no need to reload from it again.
+      installConfiguration(new CapacitySchedulerConfiguration(current, false), null);
+    }
     this.minimumAllocation = csContext.getMinimumResourceCapability();
   }
 
   private void installConfiguration(CapacitySchedulerConfiguration conf) {
+    installConfiguration(conf, null);
+  }
+
+  private void installConfiguration(CapacitySchedulerConfiguration conf,
+      ResolvedQueueTree resolved) {
     this.configuration = conf;
     // Take the snapshot when the configuration is installed. Queue setup is
     // its first reader and nothing writes into the configuration before that,
-    // so dynamic queue template writes during setup stay outside of it.
+    // so dynamic queue template writes during setup stay outside of it. A
+    // prepared configuration was copied and its snapshot taken before it was
+    // validated, and nothing writes into it either.
     ConfigSnapshot snapshot = conf.getConfigSnapshot();
     // Resolve the queues once, before the queues are parsed and set up from
     // it. The dynamic queues of the live hierarchy are resolved too, because
@@ -104,11 +127,47 @@ public class CapacitySchedulerQueueContext {
         dynamicParents.add(queue.getPath());
       }
     }
-    ResolvedQueueTree tree = QueueConfigResolver.resolve(snapshot,
-        ResolutionInputs.from(conf, dynamicQueues));
+    ResolutionInputs inputs = ResolutionInputs.from(conf, dynamicQueues);
+    ResolvedQueueTree tree = resolved != null
+        && resolved.isResolvedFrom(snapshot, inputs)
+        ? resolved : QueueConfigResolver.resolve(snapshot, inputs);
     synchronized (this) {
       this.resolvedQueueTree = tree;
       this.existingDynamicParents = Collections.unmodifiableSet(dynamicParents);
+    }
+  }
+
+  /**
+   * A configuration prepared for installation while it is validated before
+   * activation, outside the scheduler write lock: the copy the queue context
+   * installs, taken from the loaded configuration before the validation took
+   * the snapshot of the copy, and the queue tree the validation resolved from
+   * that snapshot.
+   */
+  static final class PreparedConfiguration {
+    private final CapacitySchedulerConfiguration source;
+    private final CapacitySchedulerConfiguration configuration;
+    private ResolvedQueueTree resolvedQueueTree;
+
+    /**
+     * @param source the loaded configuration the scheduler activates
+     */
+    PreparedConfiguration(CapacitySchedulerConfiguration source) {
+      this.source = source;
+      this.configuration = new CapacitySchedulerConfiguration(source, false);
+      // Neither was written into since the copy was taken, so the snapshot
+      // of the copy is the snapshot of the source too
+      source.useConfigSnapshotOf(configuration);
+    }
+
+    /** @return the copy to validate and install */
+    CapacitySchedulerConfiguration getConfiguration() {
+      return configuration;
+    }
+
+    /** @param tree the queue tree the validation resolved from the snapshot */
+    void setResolvedQueueTree(ResolvedQueueTree tree) {
+      this.resolvedQueueTree = tree;
     }
   }
 
