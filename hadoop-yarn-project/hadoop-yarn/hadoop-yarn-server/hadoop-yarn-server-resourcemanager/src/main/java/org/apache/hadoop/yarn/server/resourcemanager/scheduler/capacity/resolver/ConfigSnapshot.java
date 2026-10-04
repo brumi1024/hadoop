@@ -148,7 +148,7 @@ public final class ConfigSnapshot {
    *         example on a too deep variable substitution
    */
   public String get(String key) {
-    RuntimeException failure = failures.get(key);
+    RuntimeException failure = failures.isEmpty() ? null : failures.get(key);
     if (failure != null) {
       throw failure;
     }

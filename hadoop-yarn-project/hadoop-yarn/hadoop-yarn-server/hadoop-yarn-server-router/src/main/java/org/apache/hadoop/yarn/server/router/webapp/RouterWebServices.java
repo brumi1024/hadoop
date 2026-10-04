@@ -19,7 +19,10 @@
 package org.apache.hadoop.yarn.server.router.webapp;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Enumeration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -40,6 +43,7 @@ import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.Context;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
@@ -109,6 +113,11 @@ import static org.apache.hadoop.yarn.server.resourcemanager.webapp.RMWebServices
 @Singleton
 @Path(RMWSConsts.RM_WEB_SERVICE_PATH)
 public class RouterWebServices implements RMWebServiceProtocol {
+
+  @VisibleForTesting
+  static final String IF_MATCH_UNSUPPORTED = "If-Match is not supported for"
+      + " scheduler-conf through the Router. Send conditional scheduler"
+      + " configuration updates to the ResourceManager directly.";
 
   private static final Logger LOG =
       LoggerFactory.getLogger(RouterWebServices.class);
@@ -915,10 +924,16 @@ public class RouterWebServices implements RMWebServiceProtocol {
   public Response updateSchedulerConfiguration(SchedConfUpdateInfo mutationInfo,
       @Context HttpServletRequest hsr)
       throws AuthorizationException, InterruptedException {
+    if (hasUnsupportedIfMatch(hsr)) {
+      LOG.info("Rejected a conditional scheduler configuration update:"
+          + " the Router does not support If-Match.");
+      return Response.status(Response.Status.BAD_REQUEST).type(MediaType.TEXT_PLAIN)
+          .entity(IF_MATCH_UNSUPPORTED).build();
+    }
     init();
     RequestInterceptorChainWrapper pipeline = getInterceptorChain(hsr);
-    return pipeline.getRootInterceptor()
-        .updateSchedulerConfiguration(mutationInfo, hsr);
+    return withoutETag(pipeline.getRootInterceptor()
+        .updateSchedulerConfiguration(mutationInfo, hsr));
   }
 
   /**
@@ -952,7 +967,40 @@ public class RouterWebServices implements RMWebServiceProtocol {
       throws AuthorizationException {
     init();
     RequestInterceptorChainWrapper pipeline = getInterceptorChain(hsr);
-    return pipeline.getRootInterceptor().getSchedulerConfiguration(hsr);
+    return withoutETag(pipeline.getRootInterceptor().getSchedulerConfiguration(hsr));
+  }
+
+  /** The Router cannot honor If-Match, so it must not hand out an RM ETag. */
+  private static Response withoutETag(Response response) {
+    if (response != null && response.getHeaderString(HttpHeaders.ETAG) != null) {
+      return Response.fromResponse(response).header(HttpHeaders.ETAG, null).build();
+    }
+    return response;
+  }
+
+  /**
+   * The Router neither forwards request headers to the RM nor can it evaluate
+   * a precondition against a merged federated view, so an If-Match header
+   * other than {@code *} is rejected instead of being dropped silently.
+   */
+  private static boolean hasUnsupportedIfMatch(HttpServletRequest hsr) {
+    if (hsr == null) {
+      return false;
+    }
+    Enumeration<String> values = hsr.getHeaders(HttpHeaders.IF_MATCH);
+    if (values == null || !values.hasMoreElements()) {
+      return false;
+    }
+    List<String> elements = new ArrayList<>();
+    while (values.hasMoreElements()) {
+      String value = values.nextElement();
+      for (String element : String.valueOf(value).split(",")) {
+        if (!element.trim().isEmpty()) {
+          elements.add(element.trim());
+        }
+      }
+    }
+    return !(elements.size() == 1 && "*".equals(elements.get(0)));
   }
 
   @VisibleForTesting

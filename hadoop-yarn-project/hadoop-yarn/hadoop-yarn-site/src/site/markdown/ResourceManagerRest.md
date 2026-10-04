@@ -8044,8 +8044,9 @@ HTTP Request:
 
 Response Header:
 
-      TTP/1.1 200 OK
+      HTTP/1.1 200 OK
       Content-Type: application/xml; charset=utf-8
+      ETag: "kq0mVYJkDP1oThN0wjSdZ3XoGt8fvqMMnGOAuXZfxHw"
       Transfer-Encoding: chunked
 
 Response Body:
@@ -8312,6 +8313,81 @@ Response Header:
       Transfer-Encoding: chunked
 
 ```yarn rmadmin -removeFromClusterNodeLabels x```
+
+### Validation before the change is stored
+
+With the capacity scheduler, a PUT request validates the configuration the change would activate before the change is written to the configuration store.
+The same validation runs before `yarn rmadmin -refreshQueues`, a configuration store format and a ResourceManager transition to active activate a configuration.
+It reports the same issues as `POST /scheduler-conf/validate/v2`, against the live queues of the scheduler.
+
+* An ERROR rejects the change with the response the queue refresh would have produced, for example `400 Bad Request` with `Failed to re-init queues : ` followed by the reason.
+  Nothing is written to the configuration store, the configuration returned by GET and its `ETag` stay the same, and the scheduler keeps running its current configuration.
+* A WARNING is logged by the ResourceManager and does not reject the change.
+* Checks the validation does not cover still run while the queues are refreshed, with the same responses as before.
+
+An invalid minimum or maximum scheduler allocation, for example a `yarn.scheduler.maximum-allocation-mb` below `yarn.scheduler.minimum-allocation-mb` in *global-updates*, is now also rejected before it is stored; before, the change was stored and left the scheduler and the configuration returned by GET on the rejected values.
+The response for that case is unchanged.
+
+Mutations are still applied one at a time, and the configuration store is still written and the reservation system refreshed outside the scheduler lock.
+
+### Conditional updates with ETag and If-Match
+
+A GET response carries a strong `ETag` header that identifies the content of the returned scheduler configuration.
+The value is an opaque quoted string derived only from the configuration properties, so it changes whenever any property changes and stays the same when the content is unchanged, including across a configuration store format or an RM restart.
+Clients must not interpret or construct it.
+
+To avoid overwriting a change made by someone else since the configuration was read, send the `ETag` of the last GET in an `If-Match` header of the PUT request.
+The RM compares it with the current configuration immediately before the change is written to the configuration store, while no other mutation can run.
+
+* If the value matches the current configuration, the request is processed as without the header.
+* If it does not match, the RM returns `412 Precondition Failed` with a plain text message, and nothing is written to the store or applied to the scheduler.
+  Read the configuration again, reapply the intended change and resubmit it with the new `ETag`.
+* A comma separated list of tags matches when any of them is the current `ETag`.
+  Weak entity tags (`W/"..."`) and malformed values never match.
+* `If-Match: *` and a request without `If-Match` behave exactly as before: no precondition is evaluated.
+
+A successful PUT returns the `ETag` of the configuration it committed, computed while no other mutation can run.
+A client that applies a change in several requests, for example stopping a queue before it removes the queue, sends that `ETag` as the `If-Match` of its next request, so a change made by someone else between two of its requests fails the next one with `412 Precondition Failed`.
+A new GET does not serve that purpose, because its `ETag` already includes the other change.
+
+The precondition can fail spuriously, for example when the GET observed a change that was rolled back, but it never lets a change based on a stale configuration through.
+The status and response body of every other outcome are unchanged.
+A request that fails after it was sent, for example with a timeout, may still have been applied; read the configuration again instead of retrying the same request automatically.
+
+HTTP Request:
+
+```xml
+      Accept: application/xml
+      PUT http://rm-http-address:port/ws/v1/cluster/scheduler-conf
+      Content-Type: application/xml
+      If-Match: "kq0mVYJkDP1oThN0wjSdZ3XoGt8fvqMMnGOAuXZfxHw"
+      <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <sched-conf>
+        <update-queue>
+          <queue-name>root.default</queue-name>
+          <params>
+            <entry>
+              <key>maximum-applications</key>
+              <value>100</value>
+            </entry>
+          </params>
+        </update-queue>
+      </sched-conf>
+```
+
+Response Header when the configuration changed since it was read:
+
+      HTTP/1.1 412 Precondition Failed
+      Content-Type: text/plain
+
+The RM cross-origin filter does not expose the `ETag` header, so browser clients served from another origin cannot read it.
+
+**Router**
+
+The YARN Router does not support conditional scheduler configuration updates.
+It does not forward request headers to the RM, and in federation mode the GET response merges the configurations of several sub-clusters.
+Therefore a GET through the Router never returns an `ETag`, and a PUT through the Router with an `If-Match` header other than `*` is rejected with `400 Bad Request` and a plain text message instead of being applied without the precondition.
+Send conditional updates to the RM directly.
 
 
 Scheduler Configuration Validation API

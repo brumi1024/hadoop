@@ -33,6 +33,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Capacity
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerConfiguration;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.NodeLabelInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.dao.NodeLabelsInfo;
 import org.apache.hadoop.yarn.server.resourcemanager.webapp.jsonprovider.ExcludeRootJSONProvider;
@@ -57,8 +58,10 @@ import org.slf4j.LoggerFactory;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.ws.rs.client.Entity;
+import javax.ws.rs.client.Invocation;
 import javax.ws.rs.client.WebTarget;
 import javax.ws.rs.core.Application;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
@@ -66,6 +69,7 @@ import javax.ws.rs.core.Response.Status;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.security.Principal;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -79,6 +83,7 @@ import static org.apache.hadoop.yarn.server.resourcemanager.webapp.TestWebServic
 import static org.apache.hadoop.yarn.server.resourcemanager.webapp.TestWebServiceUtil.toJson;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -288,6 +293,155 @@ public class TestRMWebServicesConfigurationMutation extends JerseyTestBase {
     assertEquals(1, getConfigVersion());
     testAddNestedQueue();
     assertEquals(2, getConfigVersion());
+  }
+
+  private String getSchedulerConfETag() {
+    Response response = target().path("ws").path("v1").path("cluster")
+        .queryParam("user.name", userName).path(RMWSConsts.SCHEDULER_CONF)
+        .request(MediaType.APPLICATION_JSON).get(Response.class);
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+    String etag = response.getHeaderString(HttpHeaders.ETAG);
+    assertNotNull(etag);
+    return etag;
+  }
+
+  private static SchedConfUpdateInfo maxAppsUpdate(String queue, String value) {
+    SchedConfUpdateInfo updateInfo = new SchedConfUpdateInfo();
+    Map<String, String> params = new HashMap<>();
+    params.put(CapacitySchedulerConfiguration.MAXIMUM_APPLICATIONS_SUFFIX, value);
+    updateInfo.getUpdateQueueInfo().add(new QueueConfigInfo(queue, params));
+    return updateInfo;
+  }
+
+  /**
+   * Sends a PUT scheduler-conf with the given If-Match field values (none
+   * means no header). The bound servlet request is a mock, so it is stubbed
+   * with the same values the client sends.
+   */
+  private Response putSchedulerConf(SchedConfUpdateInfo updateInfo,
+      String... ifMatch) {
+    when(request.getHeaders(HttpHeaders.IF_MATCH)).thenAnswer(
+        invocation -> Collections.enumeration(Arrays.asList(ifMatch)));
+    Invocation.Builder builder = target()
+        .register(new IncludeRootJSONProvider())
+        .register(new ExcludeRootJSONProvider())
+        .path("ws").path("v1").path("cluster").path(RMWSConsts.SCHEDULER_CONF)
+        .queryParam("user.name", userName)
+        .request(MediaType.APPLICATION_JSON);
+    for (String value : ifMatch) {
+      builder = builder.header(HttpHeaders.IF_MATCH, value);
+    }
+    return builder.put(Entity.entity(updateInfo, MediaType.APPLICATION_JSON),
+        Response.class);
+  }
+
+  private MutableConfigurationProvider getMutableConfProvider() {
+    return ((CapacityScheduler) rm.getResourceScheduler()).getMutableConfProvider();
+  }
+
+  @Test
+  public void testSchedulerConfETag() throws Exception {
+    String etag = getSchedulerConfETag();
+    assertTrue(etag.length() > 2 && etag.startsWith("\"") && etag.endsWith("\""),
+        etag);
+    assertEquals(etag, getSchedulerConfETag());
+    assertEquals(SchedulerConfigurationETag.compute(
+        getMutableConfProvider().getConfiguration()), etag);
+  }
+
+  @Test
+  public void testUpdateWithMatchingIfMatch() throws Exception {
+    String etag = getSchedulerConfETag();
+    Response response = putSchedulerConf(maxAppsUpdate("root.a", "100"),
+        "\"stale\"", etag);
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+    assertEquals("Configuration change successfully applied.",
+        response.readEntity(String.class));
+    assertEquals(100, ((CapacityScheduler) rm.getResourceScheduler())
+        .getConfiguration().getMaximumApplicationsPerQueue(ROOT_A));
+    assertNotEquals(etag, getSchedulerConfETag());
+    assertEquals(2, getConfigVersion());
+  }
+
+  /**
+   * A successful PUT returns the ETag of the configuration it committed, so
+   * a client can make the next change of a multi-step update conditional.
+   */
+  @Test
+  public void testUpdateReturnsCommittedETag() throws Exception {
+    Response first = putSchedulerConf(maxAppsUpdate("root.a", "100"),
+        getSchedulerConfETag());
+    assertEquals(Status.OK.getStatusCode(), first.getStatus());
+    String committed = first.getHeaderString(HttpHeaders.ETAG);
+    assertEquals(getSchedulerConfETag(), committed);
+
+    Response second = putSchedulerConf(maxAppsUpdate("root.b", "200"),
+        committed);
+    assertEquals(Status.OK.getStatusCode(), second.getStatus());
+    assertNotEquals(committed, second.getHeaderString(HttpHeaders.ETAG));
+    assertEquals(getSchedulerConfETag(), second.getHeaderString(HttpHeaders.ETAG));
+
+    // A change made by someone else in between makes the chained ETag stale
+    assertEquals(Status.OK.getStatusCode(),
+        putSchedulerConf(maxAppsUpdate("root.a", "300")).getStatus());
+    assertEquals(Status.PRECONDITION_FAILED.getStatusCode(),
+        putSchedulerConf(maxAppsUpdate("root.b", "400"),
+            second.getHeaderString(HttpHeaders.ETAG)).getStatus());
+  }
+
+  @Test
+  public void testUpdateWithStaleIfMatch() throws Exception {
+    String stale = getSchedulerConfETag();
+    assertEquals(Status.OK.getStatusCode(),
+        putSchedulerConf(maxAppsUpdate("root.a", "100"), stale).getStatus());
+    String current = getSchedulerConfETag();
+    long version = getConfigVersion();
+    String weakCurrent = "W/" + current;
+
+    for (String ifMatch : new String[] {stale, weakCurrent,
+        current.substring(1, current.length() - 1)}) {
+      Response response = putSchedulerConf(maxAppsUpdate("root.b", "200"),
+          ifMatch);
+      assertEquals(Status.PRECONDITION_FAILED.getStatusCode(),
+          response.getStatus(), ifMatch);
+      assertTrue(response.getMediaType().isCompatible(MediaType.TEXT_PLAIN_TYPE),
+          String.valueOf(response.getMediaType()));
+      assertTrue(response.readEntity(String.class).startsWith("If-Match does not"
+          + " match the current scheduler configuration."));
+    }
+
+    // Nothing was logged, applied or confirmed.
+    assertEquals(version, getConfigVersion());
+    assertEquals(current, getSchedulerConfETag());
+    assertNull(getMutableConfProvider().getConfiguration().get(
+        CapacitySchedulerConfiguration.PREFIX + "root.b."
+            + CapacitySchedulerConfiguration.MAXIMUM_APPLICATIONS_SUFFIX));
+    assertEquals(100, ((CapacityScheduler) rm.getResourceScheduler())
+        .getConfiguration().getMaximumApplicationsPerQueue(ROOT_A));
+  }
+
+  @Test
+  public void testUpdateWithoutPrecondition() throws Exception {
+    getSchedulerConfETag();
+    Response response = putSchedulerConf(maxAppsUpdate("root.a", "100"), "*");
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+    assertEquals("Configuration change successfully applied.",
+        response.readEntity(String.class));
+
+    response = putSchedulerConf(maxAppsUpdate("root.b", "200"));
+    assertEquals(Status.OK.getStatusCode(), response.getStatus());
+    assertEquals("Configuration change successfully applied.",
+        response.readEntity(String.class));
+    assertEquals(3, getConfigVersion());
+
+    // Failures keep the trunk status and body when no precondition is sent.
+    SchedConfUpdateInfo invalid = new SchedConfUpdateInfo();
+    invalid.getRemoveQueueInfo().add("root.doesnotexist");
+    response = putSchedulerConf(invalid);
+    assertEquals(Status.BAD_REQUEST.getStatusCode(), response.getStatus());
+    response = putSchedulerConf(invalid, "*");
+    assertEquals(Status.BAD_REQUEST.getStatusCode(), response.getStatus());
+    assertEquals(3, getConfigVersion());
   }
 
   @Test

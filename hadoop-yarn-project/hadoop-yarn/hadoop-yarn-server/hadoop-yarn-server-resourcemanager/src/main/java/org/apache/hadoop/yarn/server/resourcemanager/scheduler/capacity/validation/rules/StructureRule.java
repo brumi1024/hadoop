@@ -32,7 +32,6 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.Abstract
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueStructureChecks;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.QueueConfigResolver;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.QueueProperty.Kind;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.Resolved;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.ResolvedQueueConfig;
@@ -130,8 +129,7 @@ public final class StructureRule implements ValidationRule {
       if (context.isManagedParent(queue)) {
         if (labelsByQueue == null) {
           try {
-            labelsByQueue = QueueConfigResolver.configuredNodeLabelsByQueue(
-                context.getProposed());
+            labelsByQueue = context.getConfiguredNodeLabelsByQueue();
           } catch (RuntimeException e) {
             // Reported by the node label rule
             return;

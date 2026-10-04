@@ -87,6 +87,12 @@ public final class ResolutionInputs {
     public boolean isLeaf() {
       return leaf;
     }
+
+    private boolean isSameAs(DynamicQueue other) {
+      return path.equals(other.path)
+          && legacyAutoCreated == other.legacyAutoCreated
+          && leaf == other.leaf;
+    }
   }
 
   private final List<DynamicQueue> dynamicQueues;
@@ -150,6 +156,32 @@ public final class ResolutionInputs {
     }
     return new ResolutionInputs(dynamicQueues, maximumAllocation,
         maximumPriority, maximumAllocationFailure, maximumPriorityFailure);
+  }
+
+  /**
+   * Whether resolving with these inputs gives the same tree as resolving
+   * with {@code other}: the same dynamic queues in the same order and the
+   * same cluster maximums, all of which could be read.
+   * @param other the other inputs
+   * @return true if the inputs are interchangeable
+   */
+  public boolean isEquivalentTo(ResolutionInputs other) {
+    if (clusterMaximumAllocationFailure != null
+        || clusterMaximumApplicationPriorityFailure != null
+        || other.clusterMaximumAllocationFailure != null
+        || other.clusterMaximumApplicationPriorityFailure != null
+        || !clusterMaximumAllocation.equals(other.clusterMaximumAllocation)
+        || !clusterMaximumApplicationPriority.equals(
+            other.clusterMaximumApplicationPriority)
+        || dynamicQueues.size() != other.dynamicQueues.size()) {
+      return false;
+    }
+    for (int i = 0; i < dynamicQueues.size(); i++) {
+      if (!dynamicQueues.get(i).isSameAs(other.dynamicQueues.get(i))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public List<DynamicQueue> getDynamicQueues() {

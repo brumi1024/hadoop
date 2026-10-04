@@ -1073,6 +1073,17 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     configurationProperties = new ConfigurationProperties(configSnapshot);
   }
 
+  /**
+   * Uses the snapshot of a copy of this configuration as the snapshot of
+   * this one, instead of taking the same snapshot twice. Only valid while
+   * neither configuration has been written into since the copy was taken.
+   * @param copy a copy of this configuration
+   */
+  void useConfigSnapshotOf(CapacitySchedulerConfiguration copy) {
+    configSnapshot = copy.getConfigSnapshot();
+    configurationProperties = copy.getConfigurationProperties();
+  }
+
   public void setQueueMaximumAllocationMb(QueuePath queue, int value) {
     String queuePrefix = getQueuePrefix(queue);
     setInt(queuePrefix + MAXIMUM_ALLOCATION_MB, value);
