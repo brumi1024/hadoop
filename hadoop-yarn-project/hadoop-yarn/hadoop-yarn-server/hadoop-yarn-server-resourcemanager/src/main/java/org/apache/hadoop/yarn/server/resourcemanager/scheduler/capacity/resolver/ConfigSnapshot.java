@@ -146,7 +146,7 @@ public final class ConfigSnapshot {
    *         substitution; that exception is the cause
    */
   public String get(String key) {
-    RuntimeException failure = failures.get(key);
+    RuntimeException failure = failures.isEmpty() ? null : failures.get(key);
     if (failure != null) {
       throw new IllegalStateException(
           "Failed to resolve configuration property " + key, failure);

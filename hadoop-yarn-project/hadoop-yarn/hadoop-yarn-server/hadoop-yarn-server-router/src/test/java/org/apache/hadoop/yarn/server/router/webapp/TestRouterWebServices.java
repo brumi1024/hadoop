@@ -24,10 +24,18 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
 
+import javax.servlet.http.HttpServletRequest;
+import javax.ws.rs.core.HttpHeaders;
+import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 import org.apache.hadoop.security.UserGroupInformation;
@@ -212,6 +220,49 @@ public class TestRouterWebServices extends BaseRouterWebServicesTest {
 
     Response response20 = getSchedulerConfiguration(user);
     assertNotNull(response20);
+  }
+
+  /**
+   * The Router cannot honor If-Match, so it must not pass an RM ETag on.
+   */
+  @Test
+  public void testRouterDoesNotExposeSchedulerConfETag() throws Exception {
+    Response response = getSchedulerConfiguration(user);
+    assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+    assertEquals(MockRESTRequestInterceptor.SCHEDULER_CONF_BODY, response.getEntity());
+    assertNull(response.getHeaderString(HttpHeaders.ETAG));
+  }
+
+  /**
+   * An If-Match precondition is rejected rather than dropped; an absent
+   * header and If-Match: * are forwarded as before, without the RM ETag.
+   */
+  @Test
+  public void testRouterRejectsIfMatchOnSchedulerConfUpdate() throws Exception {
+    for (String[] ifMatch : new String[][] {{"\"abc\""}, {"W/\"abc\""},
+        {"\"abc\", *"}, {""}, {"*", "\"abc\""}}) {
+      Response response = getRouterWebServices().updateSchedulerConfiguration(
+          null, requestWithIfMatch(ifMatch));
+      assertEquals(Response.Status.BAD_REQUEST.getStatusCode(), response.getStatus(),
+          Arrays.toString(ifMatch));
+      assertEquals(MediaType.TEXT_PLAIN_TYPE, response.getMediaType());
+      assertEquals(RouterWebServices.IF_MATCH_UNSUPPORTED, response.getEntity());
+    }
+    for (String[] ifMatch : new String[][] {{}, {"*"}, {" * "}, {"*", ""}}) {
+      Response response = getRouterWebServices().updateSchedulerConfiguration(
+          null, requestWithIfMatch(ifMatch));
+      assertEquals(Response.Status.OK.getStatusCode(), response.getStatus(),
+          Arrays.toString(ifMatch));
+      assertNull(response.getHeaderString(HttpHeaders.ETAG), Arrays.toString(ifMatch));
+    }
+  }
+
+  private HttpServletRequest requestWithIfMatch(String... values) {
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    when(request.getRemoteUser()).thenReturn(user);
+    when(request.getHeaders(HttpHeaders.IF_MATCH)).thenReturn(
+        Collections.enumeration(Arrays.asList(values)));
+    return request;
   }
 
   /**
