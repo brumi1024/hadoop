@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React, { useState } from 'react';
 import {
   Card,
@@ -76,7 +75,6 @@ export const TemplateScopeForm: React.FC<TemplateScopeFormProps> = ({ scope, bas
     propertiesByCategory,
     getStagedStatus,
     formState,
-    handleFieldBlur,
     getFieldErrors,
     getFieldWarnings,
     properties,
@@ -333,7 +331,6 @@ export const TemplateScopeForm: React.FC<TemplateScopeFormProps> = ({ scope, bas
                             control={control}
                             stagedStatus={getStagedStatus(propertyKey)}
                             isEnabled={propertyState?.enabled ?? true}
-                            onBlur={handleFieldBlur}
                             errors={getFieldErrors(property.formFieldName || property.name)}
                             warnings={getFieldWarnings(property.formFieldName || property.name)}
                             queuePath={scope.queuePath}

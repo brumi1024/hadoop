@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '~/testing/setup/setup';
 import { PropertyPanel } from './PropertyPanel';
@@ -77,12 +76,6 @@ let mockSubmit = vi.fn();
 let mockReset = vi.fn();
 let mockIsValid = vi.fn();
 let mockGetErrors = vi.fn();
-
-const mockUseValidation = vi.fn(() => ({ errors: {} }));
-
-vi.mock('~/contexts/ValidationContext', () => ({
-  useValidation: () => mockUseValidation(),
-}));
 
 // Mock PropertyEditorTab with ref handling
 vi.mock('./PropertyEditorTab', async () => {
@@ -146,6 +139,9 @@ function getBaseStoreState(): Partial<SchedulerStore> {
     selectQueue: mockSelectQueue,
     getQueuePropertyValue: mockGetQueuePropertyValue,
     stagedChanges: [],
+    serverIssues: [],
+    appliedWarnings: [],
+    explain: {},
     configData: new Map<string, string>(),
     schedulerData: null,
     hasPendingDeletion: vi.fn().mockReturnValue(false),
@@ -178,7 +174,6 @@ describe('PropertyPanel', () => {
     mockIsValid = vi.fn().mockReturnValue(true);
     mockGetErrors = vi.fn().mockReturnValue({});
     mockSubmit.mockResolvedValue(undefined);
-    mockUseValidation.mockReturnValue({ errors: {} });
     mockGetQueuePropertyValue.mockReset();
     mockGetQueuePropertyValue.mockReturnValue({ value: 'false', isStaged: false });
     mockGetQueueByPath.mockReset();
@@ -370,23 +365,24 @@ describe('PropertyPanel', () => {
     setStoreState({
       selectedQueuePath: 'root.default',
       isPropertyPanelOpen: true,
+      serverIssues: [
+        {
+          queuePath: 'root.default',
+          propertyKey: 'yarn.scheduler.capacity.root.default.capacity',
+          message: 'Invalid value',
+          severity: 'error',
+          ruleId: 'test-rule',
+        },
+        {
+          queuePath: 'root.other',
+          propertyKey: 'yarn.scheduler.capacity.root.other.capacity',
+          message: 'Other queue',
+          severity: 'error',
+          ruleId: 'test-rule',
+        },
+      ],
     });
     mockGetQueueByPath.mockReturnValue(mockQueue);
-
-    mockUseValidation.mockReturnValue({
-      errors: {
-        'root.default': {
-          capacity: [
-            {
-              field: 'capacity',
-              message: 'Invalid value',
-              severity: 'error',
-              rule: 'test-rule',
-            },
-          ],
-        },
-      },
-    });
 
     render(<PropertyPanel />);
 

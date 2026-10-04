@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '~/testing/setup/setup';
 import { AddQueueDialog } from './AddQueueDialog';
@@ -122,7 +121,7 @@ describe('AddQueueDialog', () => {
     expect(mockOpenCapacityEditor).not.toHaveBeenCalled();
   });
 
-  it('should validate queue name with special characters', async () => {
+  it('should allow non-portable queue name characters for server validation', async () => {
     const user = userEvent.setup();
 
     render(<AddQueueDialog open={true} parentQueuePath="root" onClose={vi.fn()} />);
@@ -130,14 +129,31 @@ describe('AddQueueDialog', () => {
     const nameInput = screen.getByLabelText(/queue name/i);
     const submitButton = screen.getByRole('button', { name: /create queue/i });
 
-    await user.type(nameInput, 'queue@#$%');
+    await user.type(nameInput, 'queue@special');
 
-    // Button should be disabled for invalid characters
+    // The server accepts non-portable characters and returns a warning.
     await waitFor(() => {
-      expect(submitButton).toBeDisabled();
+      expect(submitButton).not.toBeDisabled();
     });
 
-    expect(mockAddChildQueue).not.toHaveBeenCalled();
+    await user.click(submitButton);
+
+    expect(mockAddChildQueue).toHaveBeenCalledWith('root', 'queue@special', expect.any(Object));
+  });
+
+  it('should not impose a queue name length limit', async () => {
+    const user = userEvent.setup();
+
+    render(<AddQueueDialog open={true} parentQueuePath="root" onClose={vi.fn()} />);
+
+    const nameInput = screen.getByLabelText(/queue name/i);
+    const submitButton = screen.getByRole('button', { name: /create queue/i });
+
+    await user.type(nameInput, 'q'.repeat(51));
+
+    await waitFor(() => {
+      expect(submitButton).not.toBeDisabled();
+    });
   });
 
   it('should stage new queue on valid submission', async () => {

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import type { QueueInfo } from './queue';
 import { QUEUE_TYPES } from './constants';
 
@@ -46,9 +45,8 @@ export function getQueueNameValidationError(name: string): string | null {
     return 'Queue names cannot contain dots (.)';
   }
 
-  // Must match alphanumeric, hyphen, underscore pattern
-  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-    return 'Queue names should only contain letters, numbers, hyphens, and underscores';
+  if (/[,\r\n]/.test(name)) {
+    return 'Queue names cannot contain list or line delimiters';
   }
 
   return null;

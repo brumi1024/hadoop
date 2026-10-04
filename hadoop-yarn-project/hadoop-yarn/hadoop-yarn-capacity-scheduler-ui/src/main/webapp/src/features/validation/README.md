@@ -14,197 +14,46 @@
 
 # Validation Feature
 
-This directory contains the validation engine for the YARN Capacity Scheduler UI. The validation system ensures that configuration changes meet YARN scheduler requirements before they are applied to the cluster.
+The ResourceManager is the only validator of Capacity Scheduler configuration.
+The UI has no validation rules of its own; it sends the staged proposal to the server and displays the issues it gets back.
 
-## Architecture Overview
+## Server validation
 
-The validation system is a **multi-layered architecture** that progressively validates configurations:
+The staged-changes store posts the proposal to POST /scheduler-conf/validate/v2 with explain=affected.
+Every change to the staged proposal, and every reload of the baseline, schedules a validation after a short debounce (VALIDATION_DEBOUNCE_MS in stores/slices/stagedChangesSlice.ts).
+The trigger is a store subscription, so validation does not depend on which panel is open.
+Each request is tagged with the proposal identity (the baseline ETag plus the request body); a response for an older identity is discarded.
 
-1. **Schema-level validation** (property descriptors) - Basic format checks and ranges
-2. **Business validation rules** (validation-rules.ts) - Complex cross-field and cross-queue logic
-3. **Cross-queue validation** (this feature) - Dependency-aware validation across the queue hierarchy
+The validated request is the proposal as apply submits it: queues that apply stops first (parents of new queues, removed queues, queues gaining auto-creation) appear as STOPPED, and new queues appear STOPPED until they are started after the mutation.
+Lifecycle prerequisites that apply satisfies itself are therefore never reported.
 
-## Key Components
+A 200 response is always a validation result.
+Any other status, including a 400 RemoteException, is a failed request: it is shown as "Validation unavailable" and never as an accepted proposal.
 
-### service.ts
+## Issue mapping
 
-The **validation service** provides core validation functions:
+service.ts holds the single mapper from server issues to fields.
+Issues are matched only by their exact (queuePath, propertyKey) pair:
 
-- `validateField()` - Validates a single field change with full context
-- `validateQueue()` - Validates all properties of a queue
-- `hasBlockingIssues()` - Checks if any validation issues are blocking errors
-- `splitIssues()` - Separates issues into errors and warnings
+- getPropertyIssues() for a queue property, with the key built by buildPropertyKey().
+- getGlobalPropertyIssues() for a global property; global issues have a null queuePath.
+- getStagedChangeIssues() for the key a staged change writes.
+- getQueueIssues() and getGlobalIssues() for badges and summary lists.
 
-The service coordinates between individual validation rules and the cross-queue logic in `crossQueue.ts`.
+There are no heuristics: an issue whose key matches no field is still listed in the staged-changes panel and counted in the queue badges.
 
-### crossQueue.ts
+## Value sources
 
-Contains the **cross-queue validation engine** that:
+The explain section of validate/v2 reports, per queue and full key, the resolved value and where it comes from (QUEUE, PARENT, GLOBAL, TEMPLATE_V1, TEMPLATE_V2, DEFAULT, DERIVED).
+indexExplain() and getExplainedProperty() read it, and describeValueSource() turns it into the label shown under a property field.
+The property editor requests explain for the selected queue with loadExplain().
 
-- Detects affected queues when a change occurs
-- Runs validation rules across multiple queues
-- Handles parent-child and sibling queue relationships
-- Manages dependency-aware validation
+## Adding validation
 
-Key functions:
+Add every check to the ResourceManager validation engine.
+See docs/development/adding-validation-rules.md.
 
-- `validatePropertyChange()` - Validates a single property change with cross-queue awareness
-- `validateStagedChanges()` - Validates all staged changes, optionally filtering by affected queues/properties
+## Tests
 
-### ruleCategories.ts
-
-Defines **validation rule categories** that control validation behavior:
-
-- `CROSS_QUEUE_RULES` - Rules that affect multiple queues (parent/children/siblings)
-- `QUEUE_SPECIFIC_RULES` - Rules that only validate a single queue
-- `WARNING_ONLY_RULES` - Rules that produce warnings but never block changes
-
-These categories are used by the validation service to determine which queues need re-validation and whether errors should block applying changes.
-
-### utils/affectedQueues.ts
-
-Implements the **affected queue detection** logic:
-
-- `getAffectedQueuesForValidation()` - Determines which queues are affected by a property change
-- Handles cascading effects (e.g., parent capacity changes affect all descendants)
-- Manages sibling relationships (e.g., capacity changes require sibling re-validation)
-
-### utils/dedupeIssues.ts
-
-Provides **validation issue deduplication**:
-
-- `dedupeIssues()` - Removes duplicate validation issues based on queuePath, field, rule, message, and severity
-- Used by both `service.ts` and `crossQueue.ts` to ensure unique issues are reported
-
-## Validation Flow
-
-### Single Field Validation
-
-```
-User edits property
-    ↓
-validateField(queuePath, fieldName, value)
-    ↓
-Apply schema-level validation (property descriptor rules)
-    ↓
-Apply business validation rules (validation-rules.ts)
-    ↓
-Detect affected queues
-    ↓
-Run cross-queue validation
-    ↓
-Return validation issues
-```
-
-### Staged Changes Validation
-
-```
-User stages changes
-    ↓
-validateStagedChanges({ stagedChanges, schedulerData, configData })
-    ↓
-For each staged change:
-  - Merge staged changes with current config
-  - Validate affected queues with cross-queue awareness
-    ↓
-Return Map of change ID → validation issues
-    ↓
-Block "Apply" if blocking errors exist
-```
-
-## Validation Context
-
-The `ValidationContext` object provides all information needed for validation:
-
-```typescript
-interface ValidationContext {
-  queuePath: string; // Queue being validated
-  fieldName: string; // Property being validated
-  fieldValue: unknown; // New value for the property
-  config: Map<string, string>; // Full config including staged changes
-  schedulerData: SchedulerInfo; // Current scheduler state
-  stagedChanges: StagedChange[]; // All pending changes
-  legacyModeEnabled: boolean; // Whether legacy mode is active
-}
-```
-
-This context is passed to all validation rules, providing full visibility into the scheduler state.
-
-## Validation Rules
-
-Validation rules are defined in `src/config/validation-rules.ts`. Each rule:
-
-- Has a unique identifier
-- Specifies which properties trigger it
-- Implements validation logic via an evaluator function
-- Returns validation issues when constraints are violated
-
-See `docs/development/adding-validation-rules.md` for detailed guidance on adding new rules.
-
-## Rule Categories
-
-### Cross-Queue Rules
-
-Rules that validate relationships between multiple queues:
-
-- Sibling capacity summation
-- Parent-child capacity constraints
-- Resource mode inheritance
-- Auto-creation compatibility
-
-These rules trigger re-validation of affected queues when changes occur.
-
-### Queue-Specific Rules
-
-Rules that only validate the queue being edited:
-
-- Max-capacity >= capacity
-- Application lifetime constraints
-- ACL format validation
-- State transition rules
-
-These rules don't trigger validation of other queues.
-
-### Warning-Only Rules
-
-Rules that provide helpful feedback but never block changes:
-
-- Preemption recommendations
-- Performance warnings
-- Best practice suggestions
-
-These rules show as warnings in the UI but don't prevent applying changes.
-
-## Performance Considerations
-
-The validation system is designed for efficiency:
-
-- **Lazy evaluation** - Only affected queues are re-validated
-- **Early returns** - Rules skip validation when not applicable
-- **Cached computations** - Affected queues are computed once per change
-- **Incremental validation** - Only changed properties trigger validation
-
-## Testing
-
-Tests for the validation system are in `__tests__/`:
-
-- `crossQueue.test.ts` - Tests for cross-queue validation logic
-- `service.test.ts` - Tests for validation service orchestration
-- `utils/affectedQueues.test.ts` - Tests for affected queue detection
-
-Additional rule-specific tests are in `src/config/__tests__/validation-rules.test.ts`.
-
-## Integration Points
-
-The validation system integrates with:
-
-- **Property Editor** (`src/features/property-editor/`) - Real-time validation as users edit
-- **Staged Changes** (`src/features/staged-changes/`) - Validation before applying changes
-- **Store** (`src/stores/`) - Validation state management
-- **UI Components** - Display of validation errors and warnings
-
-## Further Reading
-
-- `docs/development/adding-validation-rules.md` - Guide for adding new validation rules
-- `docs/development/extending-scheduler-properties.md` - Adding new properties with schema validation
-- `src/config/validation-rules.ts` - Validation rule definitions
+Mapper tests live in <code>src/features/validation/**tests**/service.test.ts</code>.
+Debounce, stale-response, apply and 412 tests live in <code>src/stores/slices/**tests**/serverProposal.test.ts</code>.

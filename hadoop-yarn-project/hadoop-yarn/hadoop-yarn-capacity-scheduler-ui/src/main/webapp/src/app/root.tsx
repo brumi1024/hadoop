@@ -16,11 +16,9 @@
  * limitations under the License.
  */
 
-
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router';
 import { Toaster } from '~/components/ui/sonner';
 import { ThemeProvider } from '~/components/providers/theme-provider';
-import { ValidationProvider } from '~/contexts/ValidationContext';
 
 import './app.css';
 
@@ -49,11 +47,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  return (
-    <ValidationProvider>
-      <Outlet />
-    </ValidationProvider>
-  );
+  return <Outlet />;
 }
 
 export function HydrateFallback() {
@@ -66,9 +60,7 @@ export function HydrateFallback() {
         >
           <span className="sr-only">Loading...</span>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Loading YARN Capacity Scheduler UI...
-        </p>
+        <p className="text-sm text-muted-foreground">Loading YARN Capacity Scheduler UI...</p>
       </div>
     </div>
   );

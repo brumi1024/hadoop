@@ -16,8 +16,6 @@
  * limitations under the License.
  */
 
-
-import { capacityValueSchema, integerSchema, aclFormatSchema } from '~/config/schemas/validation';
 import { SPECIAL_VALUES } from '~/types';
 import type {
   PropertyDescriptor,
@@ -25,14 +23,8 @@ import type {
   PropertyType,
   PropertyCondition,
   PropertyEvaluationContext,
-  InheritanceResolverContext,
 } from '~/types';
 import { getCapacityType } from '~/utils/capacityUtils';
-import {
-  getGlobalValue,
-  parentChainResolver,
-  globalOnlyResolver,
-} from '~/utils/resolveInheritedValue';
 
 const LEGACY_QUEUE_MODE_PROPERTY = 'yarn.scheduler.capacity.legacy-queue-mode.enabled';
 
@@ -124,14 +116,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: true,
     templateSupport: true,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Capacity is required and must be valid format.',
-        validator: (value: string) =>
-          capacityValueSchema.safeParse(value).success && value.trim() !== '',
-      },
-    ],
   },
   {
     name: 'maximum-capacity',
@@ -143,17 +127,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Invalid maximum capacity format',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          if (value === '-1') return true;
-          return capacityValueSchema.safeParse(value).success;
-        },
-      },
-    ],
   },
   {
     name: 'state',
@@ -188,15 +161,7 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: globalOnlyResolver,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between 0 and 100',
-        min: 0,
-        max: 100,
-      },
-    ],
+    inputRange: { min: 0, max: 100 },
   },
   {
     name: 'user-limit-factor',
@@ -208,18 +173,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: globalOnlyResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be -1 (unlimited) or >= 0',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          const num = parseFloat(value);
-          return !isNaN(num) && (num === -1 || num >= 0);
-        },
-      },
-    ],
   },
 
   {
@@ -231,30 +184,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: ({ configData, stagedChanges }: InheritanceResolverContext) => {
-      // YARN checks global-queue-max-application first.
-      // Only when that is unset does it fall back to maximum-applications (scaled by capacity).
-      const perQueueGlobal = getGlobalValue('global-queue-max-application', configData, stagedChanges);
-      if (perQueueGlobal !== undefined) {
-        return { value: perQueueGlobal, source: 'global' };
-      }
-      const globalMax = getGlobalValue('maximum-applications', configData, stagedChanges);
-      if (globalMax !== undefined) {
-        return { value: globalMax, source: 'global', isScaled: true };
-      }
-      return null;
-    },
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be 0 or a positive integer',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          const numericValue = parseFloat(value);
-          return !isNaN(numericValue) && Number.isInteger(numericValue) && numericValue >= 0;
-        },
-      },
-    ],
   },
   {
     name: 'maximum-am-resource-percent',
@@ -266,15 +195,7 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: globalOnlyResolver,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between 0.0 and 1.0',
-        min: 0.0,
-        max: 1.0,
-      },
-    ],
+    inputRange: { min: 0.0, max: 1.0 },
     displayFormat: {
       suffix: ' (0.0-1.0)',
       decimals: 2,
@@ -288,14 +209,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '',
     required: false,
-    inheritanceResolver: globalOnlyResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a positive integer',
-        validator: (value: string) => integerSchema.safeParse(value).success,
-      },
-    ],
   },
 
   {
@@ -351,17 +264,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a non-negative integer',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          const num = parseInt(value, 10);
-          return !isNaN(num) && Number.isInteger(num) && num >= 0;
-        },
-      },
-    ],
   },
 
   {
@@ -374,13 +276,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Invalid ACL format',
-        validator: (value: string) => aclFormatSchema.safeParse(value).success,
-      },
-    ],
   },
   {
     name: 'acl_administer_queue',
@@ -392,13 +287,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Invalid ACL format',
-        validator: (value: string) => aclFormatSchema.safeParse(value).success,
-      },
-    ],
   },
 
   {
@@ -410,14 +298,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: parentChainResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a positive integer',
-        validator: (value: string) => integerSchema.safeParse(value).success,
-      },
-    ],
   },
   {
     name: 'maximum-allocation-vcores',
@@ -428,14 +308,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: parentChainResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a positive integer',
-        validator: (value: string) => integerSchema.safeParse(value).success,
-      },
-    ],
   },
 
   {
@@ -447,18 +319,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: parentChainResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be positive integer or -1',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          const num = parseInt(value, 10);
-          return !isNaN(num) && Number.isInteger(num) && (num > 0 || num === -1);
-        },
-      },
-    ],
   },
   {
     name: 'default-application-lifetime',
@@ -470,18 +330,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: parentChainResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a non-negative integer or -1',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          const num = parseInt(value, 10);
-          return !isNaN(num) && Number.isInteger(num) && (num >= 0 || num === -1);
-        },
-      },
-    ],
   },
 
   {
@@ -493,7 +341,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: parentChainResolver,
   },
   {
     name: 'intra-queue-preemption.disable_preemption',
@@ -504,7 +351,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: parentChainResolver,
   },
   {
     name: 'priority',
@@ -515,17 +361,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '0',
     required: false,
     templateSupport: true,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be an integer',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          const num = parseInt(value, 10);
-          return !isNaN(num) && Number.isInteger(num);
-        },
-      },
-    ],
   },
 
   {
@@ -566,13 +401,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     required: false,
     showWhen: [shouldShowFlexibleAutoCreation],
     enableWhen: [({ getValue }) => getValue('auto-queue-creation-v2.enabled') === 'true'],
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a positive integer',
-        validator: (value: string) => integerSchema.safeParse(value).success,
-      },
-    ],
   },
 
   // Node Label Access Control Properties (queue-specific configuration)
@@ -586,24 +414,6 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     defaultValue: '',
     required: false,
     templateSupport: true,
-    inheritanceResolver: parentChainResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message:
-          'Must be a comma-separated list of valid label names, "*" for all, or empty for default partition',
-        validator: (value: string) => {
-          if (!value.trim()) return true; // Empty is valid (default partition only)
-          if (value.trim() === SPECIAL_VALUES.ALL_USERS_ACL) return true; // All labels
-
-          // Validate comma-separated label names
-          const labels = value.split(',').map((l) => l.trim());
-          // Check for empty labels (like trailing/leading commas)
-          if (labels.some((label) => label.length === 0)) return false;
-          return labels.every((label) => /^[0-9a-zA-Z][0-9a-zA-Z-_]*$/.test(label));
-        },
-      },
-    ],
   },
   {
     name: 'default-node-label-expression',
@@ -614,16 +424,5 @@ export const queuePropertyDefinitions: PropertyDescriptor[] = [
     category: 'node-labels' as PropertyCategory,
     defaultValue: '',
     required: false,
-    inheritanceResolver: parentChainResolver,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a valid node label name or empty for default partition',
-        validator: (value: string) => {
-          if (!value.trim()) return true; // Empty is valid (default partition)
-          return /^[0-9a-zA-Z][0-9a-zA-Z-_]*$/.test(value.trim());
-        },
-      },
-    ],
   },
 ];

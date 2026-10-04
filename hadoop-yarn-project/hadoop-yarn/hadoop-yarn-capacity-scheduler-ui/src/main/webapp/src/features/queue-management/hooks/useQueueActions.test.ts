@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { QueueInfo } from '~/types';
@@ -67,14 +66,6 @@ describe('useQueueActions', () => {
     stageQueueChange.mockClear();
     getQueueByPath.mockClear();
     Object.keys(queueMap).forEach((key) => delete queueMap[key]);
-  });
-
-  it('throws when adding child with invalid name', () => {
-    const { result } = renderHook(() => useQueueActions());
-
-    expect(() => result.current.addChildQueue('root', 'bad.name', {})).toThrowError(
-      'Queue name cannot contain dots',
-    );
   });
 
   it('throws when parent queue is missing', () => {

@@ -6,10 +6,18 @@
  */
 
 import { AUTO_CREATION_PROPS, MUTATION_OPERATIONS, SPECIAL_VALUES } from '~/types';
-import type { SchedConfUpdateInfo, StagedChange } from '~/types';
+import type { SchedConfUpdateInfo, SchedulerConfWriteResult, StagedChange } from '~/types';
 import { buildGlobalPropertyKey } from '~/utils/propertyUtils';
+import { buildMutationRequest } from './mutationBuilder';
 
-const MUTATION_VERSION_PROPERTY_KEY = 'yarn.webservice.mutation-api.version';
+type SchedulerMutationClient = {
+  updateSchedulerConf: (
+    mutation: SchedConfUpdateInfo,
+    options?: { ifMatch?: string | null },
+  ) => Promise<SchedulerConfWriteResult>;
+};
+
+type ChildQueueLookup = (path: string) => Array<{ queuePath?: string; queueName: string }>;
 
 /**
  * Get parent queues that need to be stopped when adding child queues.
@@ -135,67 +143,20 @@ export function prepareMutationRequestForSubmission(request: SchedConfUpdateInfo
 }
 
 /**
- * Add version information to a mutation request.
- */
-export function prepareMutationRequestWithVersion(
-  request: SchedConfUpdateInfo,
-  version?: string | number,
-): SchedConfUpdateInfo {
-  const clonedRequest = JSON.parse(JSON.stringify(request)) as SchedConfUpdateInfo;
-
-  const existingGlobalUpdates =
-    clonedRequest[MUTATION_OPERATIONS.GLOBAL_UPDATES]?.filter((block) => block.entry.length > 0) ??
-    [];
-
-  for (const block of existingGlobalUpdates) {
-    block.entry = block.entry.map(({ key, value }) => ({
-      key: buildGlobalPropertyKey(key),
-      value,
-    }));
-  }
-
-  if (version !== undefined) {
-    const versionValue = String(version);
-    let versionEntryUpdated = false;
-
-    for (const block of existingGlobalUpdates) {
-      const entry = block.entry.find((item) => item.key === MUTATION_VERSION_PROPERTY_KEY);
-      if (entry) {
-        entry.value = versionValue;
-        versionEntryUpdated = true;
-        break;
-      }
-    }
-
-    if (!versionEntryUpdated) {
-      existingGlobalUpdates.unshift({
-        entry: [{ key: MUTATION_VERSION_PROPERTY_KEY, value: versionValue }],
-      });
-    }
-  }
-
-  if (existingGlobalUpdates.length > 0) {
-    clonedRequest[MUTATION_OPERATIONS.GLOBAL_UPDATES] = existingGlobalUpdates;
-  } else {
-    delete clonedRequest[MUTATION_OPERATIONS.GLOBAL_UPDATES];
-  }
-
-  return clonedRequest;
-}
-
-/**
  * Apply queue states (STOPPED or RUNNING) via the API client.
  * Filters out root queue and empty queue names.
+ * Returns the result of the write, or null when there was no queue to write.
  */
 export async function applyQueueStates(
   queueNames: Iterable<string>,
   state: 'STOPPED' | 'RUNNING',
-  apiClient: { updateSchedulerConf: (mutation: SchedConfUpdateInfo) => Promise<void> },
-): Promise<void> {
+  apiClient: SchedulerMutationClient,
+  options: { ifMatch?: string | null } = {},
+): Promise<SchedulerConfWriteResult | null> {
   const uniqueQueueNames = Array.from(new Set(queueNames)).filter(
     (queueName) => queueName && queueName !== SPECIAL_VALUES.ROOT_QUEUE_NAME,
   );
-  if (uniqueQueueNames.length === 0) return;
+  if (uniqueQueueNames.length === 0) return null;
 
   const stateMutation: SchedConfUpdateInfo = {
     [MUTATION_OPERATIONS.UPDATE_QUEUE]: [
@@ -208,7 +169,7 @@ export async function applyQueueStates(
     ],
   };
 
-  await apiClient.updateSchedulerConf(stateMutation);
+  return apiClient.updateSchedulerConf(stateMutation, options);
 }
 
 /**
@@ -217,7 +178,7 @@ export async function applyQueueStates(
  */
 export function collectQueueHierarchy(
   queuePath: string,
-  getChildQueues: (path: string) => Array<{ queuePath?: string; queueName: string }>,
+  getChildQueues: ChildQueueLookup,
 ): string[] {
   const visited = new Set<string>();
 
@@ -250,7 +211,7 @@ export function collectQueueHierarchy(
 export function addQueueHierarchyToSet(
   queuePath: string,
   trackingSet: Set<string>,
-  getChildQueues: (path: string) => Array<{ queuePath?: string; queueName: string }>,
+  getChildQueues: ChildQueueLookup,
 ): void {
   for (const path of collectQueueHierarchy(queuePath, getChildQueues)) {
     if (path !== SPECIAL_VALUES.ROOT_QUEUE_NAME) {
@@ -260,20 +221,75 @@ export function addQueueHierarchyToSet(
 }
 
 /**
- * Restart queues by setting their state to RUNNING.
- * Clears the tracking set after completion.
+ * Everything an apply submits, in order: the queues stopped first, the mutation itself and
+ * the new queues started afterwards.
  */
-export async function restartQueues(
-  queueSet: Set<string>,
-  apiClient: { updateSchedulerConf: (mutation: SchedConfUpdateInfo) => Promise<void> },
-): Promise<void> {
-  if (queueSet.size === 0) return;
+export interface SubmissionPlan {
+  request: SchedConfUpdateInfo;
+  childQueuesToStart: string[];
+  parentQueuesToStop: string[];
+  removalQueuesToStop: string[];
+  autoCreationQueuesToStop: string[];
+  /**
+   * The proposal validated before apply: the mutation as the server sees it after the
+   * stop step, so lifecycle prerequisites the apply satisfies itself are not reported.
+   */
+  validationRequest: SchedConfUpdateInfo;
+}
 
-  try {
-    await applyQueueStates(queueSet, 'RUNNING', apiClient);
-  } catch (startError) {
-    console.error(`Failed to restart queues:`, startError);
-  } finally {
-    queueSet.clear();
+export function buildSubmissionPlan(
+  changes: StagedChange[],
+  getChildQueues: ChildQueueLookup,
+): SubmissionPlan {
+  const { request, childQueuesToStart } = prepareMutationRequestForSubmission(
+    buildMutationRequest(changes),
+  );
+
+  const expand = (queues: string[]): string[] => {
+    const expanded = new Set<string>();
+    for (const queue of queues) {
+      addQueueHierarchyToSet(queue, expanded, getChildQueues);
+    }
+    return Array.from(expanded);
+  };
+
+  const parentQueuesToStop = expand(
+    getParentQueuesForAdditions(request[MUTATION_OPERATIONS.ADD_QUEUE]),
+  );
+  const removalQueuesToStop = expand(
+    getQueuesForRemoval(request[MUTATION_OPERATIONS.REMOVE_QUEUE]),
+  );
+  const autoCreationQueuesToStop = expand(getQueuesForAutoCreationEnable(changes));
+
+  const validationRequest = JSON.parse(JSON.stringify(request)) as SchedConfUpdateInfo;
+  const updates = (validationRequest[MUTATION_OPERATIONS.UPDATE_QUEUE] ??= []);
+  const stopped = new Set([
+    ...parentQueuesToStop,
+    ...removalQueuesToStop,
+    ...autoCreationQueuesToStop,
+  ]);
+  for (const queueName of stopped) {
+    const update = updates.find((entry) => entry['queue-name'] === queueName);
+    if (!update) {
+      updates.push({
+        'queue-name': queueName,
+        params: { entry: [{ key: 'state', value: 'STOPPED' }] },
+      });
+    } else if (!update.params.entry.some((entry) => entry.key === 'state')) {
+      // The staged mutation runs after the stop, so an explicitly staged state wins.
+      update.params.entry.push({ key: 'state', value: 'STOPPED' });
+    }
   }
+  if (updates.length === 0) {
+    delete validationRequest[MUTATION_OPERATIONS.UPDATE_QUEUE];
+  }
+
+  return {
+    request,
+    childQueuesToStart,
+    parentQueuesToStop,
+    removalQueuesToStop,
+    autoCreationQueuesToStop,
+    validationRequest,
+  };
 }

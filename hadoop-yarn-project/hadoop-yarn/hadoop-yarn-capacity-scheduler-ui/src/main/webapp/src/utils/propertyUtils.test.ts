@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect } from 'vitest';
 import {
   buildPropertyKey,
@@ -156,30 +155,20 @@ describe('propertyUtils', () => {
       });
     });
 
-    it('should reject queue names with invalid characters', () => {
-      expect(validateQueueName('queue@123')).toEqual({
-        valid: false,
-        message: 'Queue names should only contain letters, numbers, hyphens, and underscores',
-      });
+    it('should accept non-portable characters for server-side warning handling', () => {
+      expect(validateQueueName('queue@123')).toEqual({ valid: true });
+      expect(validateQueueName('queue name')).toEqual({ valid: true });
+      expect(validateQueueName('münchen')).toEqual({ valid: true });
+    });
 
-      expect(validateQueueName('queue name')).toEqual({
+    it('should reject leading or trailing whitespace', () => {
+      expect(validateQueueName(' queue')).toEqual({
         valid: false,
-        message: 'Queue names should only contain letters, numbers, hyphens, and underscores',
+        message: 'Queue name cannot have leading or trailing whitespace',
       });
-
-      expect(validateQueueName('queue/name')).toEqual({
+      expect(validateQueueName('queue ')).toEqual({
         valid: false,
-        message: 'Queue names should only contain letters, numbers, hyphens, and underscores',
-      });
-
-      expect(validateQueueName('queue$name')).toEqual({
-        valid: false,
-        message: 'Queue names should only contain letters, numbers, hyphens, and underscores',
-      });
-
-      expect(validateQueueName('queue+name')).toEqual({
-        valid: false,
-        message: 'Queue names should only contain letters, numbers, hyphens, and underscores',
+        message: 'Queue name cannot have leading or trailing whitespace',
       });
     });
   });

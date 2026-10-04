@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import type { PropertyDescriptor, PropertyCategory, PropertyType } from '~/types';
 
 // Specify the full config name
@@ -65,14 +64,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '10000',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be 0 or greater',
-        min: 0,
-        max: 2147483647,
-      },
-    ],
+    inputRange: { min: 0, max: 2147483647 },
   },
   {
     name: 'yarn.scheduler.capacity.global-queue-max-application',
@@ -83,17 +75,6 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '',
     required: false,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be a positive integer or empty',
-        validator: (value: string) => {
-          if (!value.trim()) return true;
-          const num = parseFloat(value);
-          return !isNaN(num) && Number.isInteger(num) && num > 0;
-        },
-      },
-    ],
   },
   {
     name: 'yarn.scheduler.capacity.application.fail-fast',
@@ -113,14 +94,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '2147483647',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between 1 and 2147483647',
-        min: 1,
-        max: 2147483647,
-      },
-    ],
+    inputRange: { min: 1, max: 2147483647 },
   },
   {
     name: 'yarn.scheduler.capacity.user.max-parallel-apps',
@@ -130,14 +104,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '2147483647',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between 1 and 2147483647',
-        min: 1,
-        max: 2147483647,
-      },
-    ],
+    inputRange: { min: 1, max: 2147483647 },
   },
   {
     name: 'yarn.scheduler.capacity.minimum-user-limit-percent',
@@ -148,14 +115,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '100',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between 0 and 100',
-        min: 0,
-        max: 100,
-      },
-    ],
+    inputRange: { min: 0, max: 100 },
   },
   {
     name: 'yarn.scheduler.capacity.maximum-am-resource-percent',
@@ -166,14 +126,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '0.1',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between 0 and 1',
-        min: 0,
-        max: 1,
-      },
-    ],
+    inputRange: { min: 0, max: 1 },
   },
   {
     name: 'yarn.scheduler.capacity.user-limit-factor',
@@ -184,16 +137,6 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'application-limits' as PropertyCategory,
     defaultValue: '1',
     required: false,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be -1 (unlimited) or >= 0',
-        validator: (value: string) => {
-          const num = parseFloat(value);
-          return num === -1 || num >= 0;
-        },
-      },
-    ],
   },
 
   // Placement Rules
@@ -275,14 +218,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'container-allocation' as PropertyCategory,
     defaultValue: '40',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between -1 and 1000',
-        min: -1,
-        max: 1000,
-      },
-    ],
+    inputRange: { min: -1, max: 1000 },
   },
   {
     name: 'yarn.scheduler.capacity.rack-locality-additional-delay',
@@ -293,14 +229,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'container-allocation' as PropertyCategory,
     defaultValue: '-1',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between -1 and 1000',
-        min: -1,
-        max: 1000,
-      },
-    ],
+    inputRange: { min: -1, max: 1000 },
   },
   {
     name: 'yarn.scheduler.capacity.per-node-heartbeat.multiple-assignments-enabled',
@@ -320,16 +249,6 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'container-allocation' as PropertyCategory,
     defaultValue: '100',
     required: false,
-    validationRules: [
-      {
-        type: 'custom',
-        message: 'Must be -1 (unlimited) or greater than 0',
-        validator: (value: string) => {
-          const num = parseFloat(value);
-          return num === -1 || num > 0;
-        },
-      },
-    ],
   },
   {
     name: 'yarn.scheduler.capacity.per-node-heartbeat.maximum-offswitch-assignments',
@@ -340,14 +259,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'container-allocation' as PropertyCategory,
     defaultValue: '1',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be 1 or greater',
-        min: 1,
-        max: 2147483647,
-      },
-    ],
+    inputRange: { min: 1, max: 2147483647 },
   },
 
   {
@@ -389,14 +301,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'async-scheduling' as PropertyCategory,
     defaultValue: '5',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be between 1 and 1000',
-        min: 1,
-        max: 1000,
-      },
-    ],
+    inputRange: { min: 1, max: 1000 },
   },
   {
     name: 'yarn.scheduler.capacity.schedule-asynchronously.maximum-threads',
@@ -406,14 +311,7 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'async-scheduling' as PropertyCategory,
     defaultValue: '1',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be 1 or greater',
-        min: 1,
-        max: 2147483647,
-      },
-    ],
+    inputRange: { min: 1, max: 2147483647 },
   },
   {
     name: 'yarn.scheduler.capacity.schedule-asynchronously.maximum-pending-backlogs',
@@ -423,13 +321,6 @@ export const globalPropertyDefinitions: PropertyDescriptor[] = [
     category: 'async-scheduling' as PropertyCategory,
     defaultValue: '100',
     required: false,
-    validationRules: [
-      {
-        type: 'range',
-        message: 'Must be 1 or greater',
-        min: 1,
-        max: 2147483647,
-      },
-    ],
+    inputRange: { min: 1, max: 2147483647 },
   },
 ];

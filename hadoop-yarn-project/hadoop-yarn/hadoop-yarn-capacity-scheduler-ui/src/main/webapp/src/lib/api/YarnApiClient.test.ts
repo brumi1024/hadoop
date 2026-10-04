@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest';
 import { setupServer } from 'msw/node';
 import { http, HttpResponse, delay } from 'msw';
 import { YarnApiClient } from './YarnApiClient';
+import { isPreconditionFailed, YarnApiError } from '~/lib/errors';
 import { serverHandlers } from './mocks/server-handlers';
 import type {
   SchedulerResponse,
@@ -206,6 +206,24 @@ describe('YarnApiClient', () => {
   });
 
   describe('getSchedulerConf', () => {
+    it('should return the ETag of the configuration', async () => {
+      server.use(
+        http.get('*/ws/v1/cluster/scheduler-conf', () =>
+          HttpResponse.json({ property: [] }, { headers: { ETag: '"abc123"' } }),
+        ),
+      );
+      const client = new YarnApiClient('/ws/v1/cluster', { detectSecurityMode: false });
+      expect((await client.getSchedulerConf()).etag).toBe('"abc123"');
+    });
+
+    it('should return a null ETag when the server sends none', async () => {
+      server.use(
+        http.get('*/ws/v1/cluster/scheduler-conf', () => HttpResponse.json({ property: [] })),
+      );
+      const client = new YarnApiClient('/ws/v1/cluster', { detectSecurityMode: false });
+      expect((await client.getSchedulerConf()).etag).toBeNull();
+    });
+
     it('should fetch configuration data successfully', async () => {
       const client = new YarnApiClient('/ws/v1/cluster');
       const response = await client.getSchedulerConf();
@@ -236,29 +254,93 @@ describe('YarnApiClient', () => {
   });
 
   describe('updateSchedulerConf', () => {
-    it('should update configuration successfully', async () => {
+    it.each(['application/json', 'text/plain'])(
+      'accepts the legacy success body as %s and writes once',
+      async (mediaType) => {
+        let writes = 0;
+        server.use(
+          http.put('*/ws/v1/cluster/scheduler-conf', () => {
+            writes++;
+            return new HttpResponse('Configuration change successfully applied.', {
+              headers: { 'Content-Type': mediaType },
+            });
+          }),
+        );
+        const client = new YarnApiClient('/ws/v1/cluster');
+        await expect(client.updateSchedulerConf({ 'update-queue': [] })).resolves.toEqual({
+          etag: null,
+        });
+        expect(writes).toBe(1);
+      },
+    );
+
+    it('should send If-Match only when an ETag is given', async () => {
+      const ifMatch: (string | null)[] = [];
       server.use(
-        http.put('*/ws/v1/cluster/scheduler-conf', () => {
-          return new HttpResponse(null, { status: 200 });
+        http.put('*/ws/v1/cluster/scheduler-conf', ({ request }) => {
+          ifMatch.push(request.headers.get('If-Match'));
+          return new HttpResponse('Configuration change successfully applied.');
         }),
       );
-
       const client = new YarnApiClient('/ws/v1/cluster');
-      const updateRequest: SchedConfUpdateInfo = {
-        'update-queue': [
-          {
-            'queue-name': 'root.default',
-            params: {
-              entry: [
-                { key: 'capacity', value: '60' },
-                { key: 'maximum-capacity', value: '100' },
-              ],
-            },
-          },
-        ],
-      };
 
-      await expect(client.updateSchedulerConf(updateRequest)).resolves.not.toThrow();
+      await client.updateSchedulerConf({}, { ifMatch: '"etag-1"' });
+      await client.updateSchedulerConf({});
+
+      expect(ifMatch).toEqual(['"etag-1"', null]);
+    });
+
+    it('returns the ETag of the configuration the write committed', async () => {
+      server.use(
+        http.put(
+          '*/ws/v1/cluster/scheduler-conf',
+          () =>
+            new HttpResponse('Configuration change successfully applied.', {
+              headers: { ETag: '"etag-2"' },
+            }),
+        ),
+      );
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.updateSchedulerConf({}, { ifMatch: '"etag-1"' })).resolves.toEqual({
+        etag: '"etag-2"',
+      });
+    });
+
+    it('should map 412 to a precondition failure without retrying', async () => {
+      let writes = 0;
+      server.use(
+        http.put('*/ws/v1/cluster/scheduler-conf', () => {
+          writes++;
+          return new HttpResponse('Scheduler configuration was modified', { status: 412 });
+        }),
+      );
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      const error = await client.updateSchedulerConf({}, { ifMatch: '"old"' }).catch((e) => e);
+
+      expect(error).toBeInstanceOf(YarnApiError);
+      expect(error.status).toBe(412);
+      expect(error.kind).toBe('precondition-failed');
+      expect(isPreconditionFailed(error)).toBe(true);
+      expect(error.message).toBe('Scheduler configuration was modified');
+      expect(writes).toBe(1);
+    });
+
+    it('should surface a 400 plain-text rejection as an error', async () => {
+      server.use(
+        http.put(
+          '*/ws/v1/cluster/scheduler-conf',
+          () => new HttpResponse('Failed to re-init queues : capacity is invalid', { status: 400 }),
+        ),
+      );
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.updateSchedulerConf({})).rejects.toMatchObject({
+        status: 400,
+        kind: 'http',
+        message: 'Failed to re-init queues : capacity is invalid',
+      });
     });
 
     it('should send correct content type header', async () => {
@@ -267,7 +349,7 @@ describe('YarnApiClient', () => {
       server.use(
         http.put('*/ws/v1/cluster/scheduler-conf', ({ request }) => {
           capturedHeaders = request.headers;
-          return new HttpResponse(null, { status: 200 });
+          return new HttpResponse('Configuration change successfully applied.');
         }),
       );
 
@@ -285,7 +367,7 @@ describe('YarnApiClient', () => {
       server.use(
         http.put('*/ws/v1/cluster/scheduler-conf', async ({ request }) => {
           capturedBody = (await request.json()) as SchedConfUpdateInfo;
-          return new HttpResponse(null, { status: 200 });
+          return new HttpResponse('Configuration change successfully applied.');
         }),
       );
 
@@ -326,64 +408,230 @@ describe('YarnApiClient', () => {
       await client.updateSchedulerConf(complexUpdate);
 
       expect(capturedBody).toEqual(complexUpdate);
-      expect(capturedBody!['add-queue']).toHaveLength(1);
-      expect(capturedBody!['update-queue']).toHaveLength(1);
-      expect(capturedBody!['remove-queue']).toBe('root.production.interactive');
-      expect(capturedBody!['global-updates']).toBeDefined();
     });
   });
 
   describe('validateSchedulerConf', () => {
+    const updateRequest: SchedConfUpdateInfo = {
+      'update-queue': [
+        {
+          'queue-name': 'root.default',
+          params: { entry: [{ key: 'capacity', value: '60' }] },
+        },
+      ],
+    };
+
     it('should validate configuration successfully', async () => {
+      let capturedBody: SchedConfUpdateInfo | undefined;
       server.use(
-        http.post('*/ws/v1/cluster/scheduler-conf/validate', () => {
-          return HttpResponse.json({ validation: 'success' });
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', async ({ request }) => {
+          capturedBody = (await request.json()) as SchedConfUpdateInfo;
+          return HttpResponse.json({
+            validationResult: { valid: true, issues: { issue: [] } },
+          });
         }),
       );
 
       const client = new YarnApiClient('/ws/v1/cluster');
-      const updateRequest: SchedConfUpdateInfo = {
-        'update-queue': [
-          {
-            'queue-name': 'root.default',
-            params: { entry: [{ key: 'capacity', value: '60' }] },
-          },
-        ],
-      };
 
       await expect(client.validateSchedulerConf(updateRequest)).resolves.toEqual({
-        validation: 'success',
+        valid: true,
+        issues: [],
+        explain: [],
+      });
+      expect(capturedBody).toEqual(updateRequest);
+    });
+
+    it('should normalize an empty issues wrapper', async () => {
+      server.use(
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () =>
+          HttpResponse.json({ validationResult: { valid: true, issues: {} } }),
+        ),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.validateSchedulerConf({})).resolves.toEqual({
+        valid: true,
+        issues: [],
+        explain: [],
       });
     });
 
-    it('should pass through request body correctly', async () => {
-      let capturedBody: SchedConfUpdateInfo | undefined;
-
+    it('should read single-element lists rendered as objects', async () => {
       server.use(
-        http.post('*/ws/v1/cluster/scheduler-conf/validate', async ({ request }) => {
-          capturedBody = (await request.json()) as SchedConfUpdateInfo;
-          return HttpResponse.json({ validation: 'failed', errors: ['oops'] });
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () =>
+          HttpResponse.json({
+            validationResult: {
+              valid: false,
+              issues: {
+                issue: {
+                  queuePath: 'root.default',
+                  propertyKey: 'yarn.scheduler.capacity.root.default.capacity',
+                  ruleId: 'invalid-capacity',
+                  severity: 'ERROR',
+                  message: 'Invalid capacity',
+                },
+              },
+              explain: {
+                queue: {
+                  queuePath: 'root.default',
+                  property: {
+                    key: 'yarn.scheduler.capacity.root.default.user-limit-factor',
+                    value: '1',
+                    source: 'DEFAULT',
+                  },
+                },
+              },
+            },
+          }),
+        ),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+      const response = await client.validateSchedulerConf(updateRequest);
+
+      expect(response.valid).toBe(false);
+      expect(response.issues).toEqual([
+        {
+          queuePath: 'root.default',
+          propertyKey: 'yarn.scheduler.capacity.root.default.capacity',
+          ruleId: 'invalid-capacity',
+          severity: 'ERROR',
+          message: 'Invalid capacity',
+        },
+      ]);
+      expect(response.explain).toEqual([
+        {
+          queuePath: 'root.default',
+          properties: [
+            {
+              key: 'yarn.scheduler.capacity.root.default.user-limit-factor',
+              value: '1',
+              source: 'DEFAULT',
+              sourceDetail: null,
+            },
+          ],
+        },
+      ]);
+    });
+
+    it('should keep null-path issues global', async () => {
+      server.use(
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () =>
+          HttpResponse.json({
+            validationResult: {
+              valid: false,
+              issues: {
+                issue: [
+                  {
+                    ruleId: 'invalid-mutation',
+                    severity: 'ERROR',
+                    message: 'Queue root.missing not found',
+                  },
+                ],
+              },
+            },
+          }),
+        ),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+      const response = await client.validateSchedulerConf({ 'remove-queue': 'root.missing' });
+
+      expect(response.issues[0]).toMatchObject({ queuePath: null, propertyKey: null });
+    });
+
+    it('should send the explain parameter', async () => {
+      const urls: string[] = [];
+      server.use(
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', ({ request }) => {
+          urls.push(request.url);
+          return HttpResponse.json({ validationResult: { valid: true, issues: {} } });
         }),
       );
 
       const client = new YarnApiClient('/ws/v1/cluster');
-      const validationRequest: SchedConfUpdateInfo = {
-        'add-queue': [
-          {
-            'queue-name': 'root.newqueue',
-            params: {
-              entry: [
-                { key: 'capacity', value: '10' },
-                { key: 'maximum-capacity', value: '50' },
-              ],
-            },
-          },
-        ],
-      };
+      await client.validateSchedulerConf({}, { explain: 'affected' });
+      await client.validateSchedulerConf({}, { explain: ['root.a', 'root.b'] });
 
-      const response = await client.validateSchedulerConf(validationRequest);
-      expect(capturedBody).toEqual(validationRequest);
-      expect(response).toEqual({ validation: 'failed', errors: ['oops'] });
+      expect(new URL(urls[0]).searchParams.get('explain')).toBe('affected');
+      expect(new URL(urls[1]).searchParams.get('explain')).toBe('root.a,root.b');
+    });
+
+    it('should treat a 400 RemoteException as a typed error, never a result', async () => {
+      server.use(
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () =>
+          HttpResponse.json(
+            {
+              RemoteException: {
+                exception: 'BadRequestException',
+                message: 'Unrecognized field "update-queues"',
+                javaClassName: 'org.apache.hadoop.yarn.webapp.BadRequestException',
+              },
+            },
+            { status: 400 },
+          ),
+        ),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+      const error = await client.validateSchedulerConf({}).catch((e) => e);
+
+      expect(error).toBeInstanceOf(YarnApiError);
+      expect(error).toMatchObject({
+        status: 400,
+        kind: 'remote-exception',
+        exception: 'BadRequestException',
+        message: 'Unrecognized field "update-queues"',
+      });
+    });
+
+    it('should surface a plain-text 400 as an error', async () => {
+      server.use(
+        http.post(
+          '*/ws/v1/cluster/scheduler-conf/validate/v2',
+          () =>
+            new HttpResponse('Configuration change only supported by MutableConfScheduler.', {
+              status: 400,
+            }),
+        ),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.validateSchedulerConf({})).rejects.toMatchObject({
+        status: 400,
+        kind: 'http',
+        message: 'Configuration change only supported by MutableConfScheduler.',
+      });
+    });
+
+    it('should surface 403 for non-admin callers', async () => {
+      server.use(
+        http.post(
+          '*/ws/v1/cluster/scheduler-conf/validate/v2',
+          () => new HttpResponse('User dr.who is not authorized', { status: 403 }),
+        ),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.validateSchedulerConf({})).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('should reject a 200 body that is not a validation result', async () => {
+      server.use(
+        http.post('*/ws/v1/cluster/scheduler-conf/validate/v2', () =>
+          HttpResponse.json({ validationResult: { issues: {} } }),
+        ),
+      );
+
+      const client = new YarnApiClient('/ws/v1/cluster');
+
+      await expect(client.validateSchedulerConf({})).rejects.toMatchObject({
+        kind: 'invalid-response',
+      });
     });
   });
 
@@ -688,21 +936,6 @@ describe('YarnApiClient', () => {
   });
 
   describe('edge cases and special scenarios', () => {
-    it('should handle empty response body for successful mutations', async () => {
-      server.use(
-        http.put('*/ws/v1/cluster/scheduler-conf', () => {
-          return new HttpResponse('', { status: 200 });
-        }),
-      );
-
-      const client = new YarnApiClient('/ws/v1/cluster');
-      await expect(
-        client.updateSchedulerConf({
-          'global-updates': [{ entry: [{ key: 'test', value: 'value' }] }],
-        }),
-      ).resolves.not.toThrow();
-    });
-
     it('should preserve queue paths with special characters', async () => {
       const specialQueueResponse: SchedulerResponse = {
         scheduler: {

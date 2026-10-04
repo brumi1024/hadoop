@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
@@ -35,6 +34,9 @@ vi.mock('~/stores/schedulerStore', () => ({
       getGlobalPropertyValue: vi.fn().mockReturnValue({ value: '' }),
       getQueuePropertyValue: vi.fn().mockReturnValue({ value: '' }),
       stagedChanges: [],
+      serverIssues: [],
+      appliedWarnings: [],
+      explain: {},
       configData: new Map(),
       schedulerData: null,
       hasPendingDeletion: vi.fn().mockReturnValue(false),
@@ -103,10 +105,9 @@ const createMockPropertyEditor = () => ({
   },
   getStagedStatus: vi.fn(),
   formState: { isDirty: false },
-  handleFieldBlur: vi.fn(),
   getFieldErrors: vi.fn(() => []),
   getFieldWarnings: vi.fn(() => []),
-  getInheritanceInfo: vi.fn(() => null),
+  getExplained: vi.fn(() => null),
   properties: [
     {
       name: 'capacity',
@@ -117,7 +118,6 @@ const createMockPropertyEditor = () => ({
       category: 'capacity' as const,
       formFieldName: 'capacity',
       required: true,
-      validationRules: [],
     },
   ] as PropertyDescriptor[],
 });
@@ -185,6 +185,9 @@ describe('PropertyEditorTab', () => {
           getGlobalPropertyValue: vi.fn().mockReturnValue({ value: '' }),
           getQueuePropertyValue: vi.fn().mockReturnValue({ value: '' }),
           stagedChanges: [],
+          serverIssues: [],
+          appliedWarnings: [],
+          explain: {},
           configData: new Map(),
           schedulerData: null,
           hasPendingDeletion: vi.fn().mockReturnValue(true),

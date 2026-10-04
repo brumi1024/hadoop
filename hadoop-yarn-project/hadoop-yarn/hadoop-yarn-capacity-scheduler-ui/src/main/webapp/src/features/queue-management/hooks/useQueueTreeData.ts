@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import type { Node, Edge } from '@xyflow/react';
 import { useSchedulerStore } from '~/stores/schedulerStore';
 import type {
@@ -37,6 +36,7 @@ import {
   QUEUE_CARD_WIDTH,
 } from '~/features/queue-management/constants';
 import type { ValidationIssue } from '~/types';
+import { getQueueIssues } from '~/features/validation/service';
 
 export type QueueCardData = QueueInfo & {
   stagedStatus?: 'new' | 'modified' | 'deleted';
@@ -47,8 +47,6 @@ export type QueueCardData = QueueInfo & {
   autoCreationEligibility?: string;
   autoCreationStatus?: { status: 'off' | 'legacy' | 'flexible'; isStaged: boolean };
   validationErrors?: ValidationIssue[];
-  isAffectedByErrors?: boolean;
-  errorSource?: string;
   isAutoCreatedQueue: boolean;
 };
 
@@ -246,7 +244,11 @@ function getAutoCreationStatus(
   };
 }
 
-function transformToCardData(queueInfo: QueueInfo, stagedChanges: StagedChange[]): QueueCardData {
+function transformToCardData(
+  queueInfo: QueueInfo,
+  stagedChanges: StagedChange[],
+  serverIssues: ValidationIssue[],
+): QueueCardData {
   const getQueuePropertyValue = useSchedulerStore.getState().getQueuePropertyValue;
 
   const capacityDisplay = getQueuePropertyValue(queueInfo.queuePath, 'capacity');
@@ -254,35 +256,7 @@ function transformToCardData(queueInfo: QueueInfo, stagedChanges: StagedChange[]
 
   const stateDisplay = getQueuePropertyValue(queueInfo.queuePath, 'state');
 
-  // Collect validation errors for this queue
-  const directErrors: ValidationIssue[] = [];
-  let isAffectedByErrors = false;
-  let errorSource: string | undefined;
-
-  stagedChanges.forEach((change) => {
-    if (change.validationErrors && change.validationErrors.length > 0) {
-      // Check if this queue has direct errors
-      if (change.queuePath === queueInfo.queuePath) {
-        directErrors.push(...change.validationErrors);
-      } else {
-        // Check if this queue is affected by errors from other queues
-        // For capacity sum errors, the parent queue is affected by child changes
-        change.validationErrors.forEach((error) => {
-          if (error.rule === 'child-capacity-sum' || error.rule === 'capacity-type-consistency') {
-            // Get parent path of the changed queue
-            const changedQueueParts = change.queuePath.split('.');
-            if (changedQueueParts.length > 1) {
-              const parentPath = changedQueueParts.slice(0, -1).join('.');
-              if (parentPath === queueInfo.queuePath) {
-                isAffectedByErrors = true;
-                errorSource = change.queuePath;
-              }
-            }
-          }
-        });
-      }
-    }
-  });
+  const directErrors = getQueueIssues(serverIssues, queueInfo.queuePath);
 
   return {
     ...queueInfo,
@@ -309,21 +283,23 @@ function transformToCardData(queueInfo: QueueInfo, stagedChanges: StagedChange[]
       queueInfo.creationMethod === 'dynamicFlexible',
 
     validationErrors: directErrors.length > 0 ? directErrors : undefined,
-    isAffectedByErrors,
-    errorSource,
   };
 }
 
-function flattenQueueTree(queueInfo: QueueInfo, stagedChanges: StagedChange[]): QueueCardData[] {
+function flattenQueueTree(
+  queueInfo: QueueInfo,
+  stagedChanges: StagedChange[],
+  serverIssues: ValidationIssue[],
+): QueueCardData[] {
   const result: QueueCardData[] = [];
 
-  result.push(transformToCardData(queueInfo, stagedChanges));
+  result.push(transformToCardData(queueInfo, stagedChanges, serverIssues));
 
   if (queueInfo.queues?.queue) {
     const children = toArray(queueInfo.queues.queue);
 
     for (const child of children) {
-      result.push(...flattenQueueTree(child, stagedChanges));
+      result.push(...flattenQueueTree(child, stagedChanges, serverIssues));
     }
   }
 
@@ -334,6 +310,7 @@ function createNodes(
   queues: QueueCardData[],
   positions: Map<string, { x: number; y: number; width: number; height: number }>,
   stagedChanges: StagedChange[],
+  serverIssues: ValidationIssue[],
 ): Node<QueueCardData>[] {
   const nodes: Node<QueueCardData>[] = [];
 
@@ -369,10 +346,7 @@ function createNodes(
       const maxCapacityDisplay = getQueuePropertyValue(queuePath, 'maximum-capacity');
       const stateDisplay = getQueuePropertyValue(queuePath, 'state');
 
-      // Collect validation errors from all staged changes for this queue
-      const queueErrors = stagedChanges
-        .filter((c) => c.type === 'add' && c.queuePath === queuePath && c.validationErrors)
-        .flatMap((c) => c.validationErrors || []);
+      const queueErrors = getQueueIssues(serverIssues, queuePath);
 
       const nodeData: QueueCardData = {
         queueType: 'leaf' as const,
@@ -692,6 +666,7 @@ function augmentQueueTreeWithStagedQueues(
 export function useQueueTreeData(): UseQueueTreeDataResult {
   const schedulerData = useSchedulerStore((state) => state.schedulerData);
   const stagedChanges = useSchedulerStore((state) => state.stagedChanges);
+  const serverIssues = useSchedulerStore((state) => state.serverIssues);
   const isLoading = useSchedulerStore((state) => state.isLoading);
   const loadError = useSchedulerStore((state) =>
     state.errorContext === 'load' ? state.error : null,
@@ -722,11 +697,11 @@ export function useQueueTreeData(): UseQueueTreeDataResult {
       // Augment the tree with staged new queues
       const augmentedRootQueue = augmentQueueTreeWithStagedQueues(rootQueue, stagedChanges);
 
-      const flatQueues = flattenQueueTree(augmentedRootQueue, stagedChanges);
+      const flatQueues = flattenQueueTree(augmentedRootQueue, stagedChanges, serverIssues);
 
       const positions = layoutEngine.calculatePositions(augmentedRootQueue);
 
-      const flowNodes = createNodes(flatQueues, positions, stagedChanges);
+      const flowNodes = createNodes(flatQueues, positions, stagedChanges, serverIssues);
 
       const flowEdges = createEdges(augmentedRootQueue, positions, stagedChanges);
 

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import { Input } from '~/components/ui/input';
 import { FieldSwitch } from '~/components/ui/field-switch';
@@ -38,9 +37,8 @@ import {
 import { cn } from '~/utils/cn';
 import type { PropertyDescriptor } from '~/types/property-descriptor';
 import { HighlightedText } from '~/components/search/HighlightedText';
-import { useValidation } from '~/contexts/ValidationContext';
-import { SPECIAL_VALUES } from '~/types';
-import { splitIssues } from '~/features/validation/service';
+import { useSchedulerStore } from '~/stores/schedulerStore';
+import { getGlobalPropertyIssues, splitIssues } from '~/features/validation/service';
 
 interface PropertyInputProps {
   property: PropertyDescriptor;
@@ -59,12 +57,9 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
   searchQuery,
   disabled = false,
 }) => {
-  // Extract validation rules for min/max
-  const rangeValidation = property.validationRules?.find((rule) => rule.type === 'range');
-  const { errors } = useValidation();
-
-  const queueIssues = errors[SPECIAL_VALUES.GLOBAL_QUEUE_PATH] ?? {};
-  const fieldIssues = queueIssues[property.name] ?? [];
+  // Server issues for this global key; global issues have no queue path.
+  const serverIssues = useSchedulerStore((state) => state.serverIssues);
+  const fieldIssues = getGlobalPropertyIssues(serverIssues, property.name);
   const { errors: fieldErrors, warnings: fieldWarnings } = splitIssues(fieldIssues);
   const errorMessages = fieldErrors.map((issue) => issue.message);
   const warningMessages = fieldWarnings.map((issue) => issue.message);
@@ -266,8 +261,8 @@ export const PropertyInput: React.FC<PropertyInputProps> = ({
                 type="number"
                 value={value || property.defaultValue || ''}
                 onChange={(e) => onChange(e.target.value)}
-                min={rangeValidation?.min}
-                max={rangeValidation?.max}
+                min={property.inputRange?.min}
+                max={property.inputRange?.max}
                 disabled={isDisabled}
               />
             </FieldControl>

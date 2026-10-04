@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import {
   ReactFlow,
@@ -65,6 +64,7 @@ const FlowInner: React.FC = () => {
   // State values (trigger re-renders only when these specific values change)
   const {
     stagedChanges,
+    serverIssues,
     searchQuery,
     selectedNodeLabelFilter,
     configData,
@@ -72,6 +72,7 @@ const FlowInner: React.FC = () => {
   } = useSchedulerStore(
     useShallow((s) => ({
       stagedChanges: s.stagedChanges,
+      serverIssues: s.serverIssues,
       searchQuery: s.searchQuery,
       selectedNodeLabelFilter: s.selectedNodeLabelFilter,
       configData: s.configData,
@@ -94,16 +95,14 @@ const FlowInner: React.FC = () => {
   let warningCount = 0;
   const affectedQueues = new Set<string>();
 
-  stagedChanges.forEach((change) => {
-    if (change.validationErrors) {
-      change.validationErrors.forEach((error) => {
-        if (error.severity === 'error') {
-          errorCount++;
-        } else {
-          warningCount++;
-        }
-      });
-      affectedQueues.add(change.queuePath);
+  serverIssues.forEach((issue) => {
+    if (issue.severity === 'error') {
+      errorCount++;
+    } else {
+      warningCount++;
+    }
+    if (issue.queuePath) {
+      affectedQueues.add(issue.queuePath);
     }
   });
 
@@ -273,9 +272,9 @@ const FlowInner: React.FC = () => {
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium">
                 {validationSummary.errorCount} validation error
-                {validationSummary.errorCount !== 1 ? 's' : ''} in{' '}
-                {validationSummary.affectedQueueCount} queue
-                {validationSummary.affectedQueueCount !== 1 ? 's' : ''}
+                {validationSummary.errorCount !== 1 ? 's' : ''}
+                {validationSummary.affectedQueueCount > 0 &&
+                  ` in ${validationSummary.affectedQueueCount} queue${validationSummary.affectedQueueCount !== 1 ? 's' : ''}`}
               </span>
               <Button
                 size="sm"

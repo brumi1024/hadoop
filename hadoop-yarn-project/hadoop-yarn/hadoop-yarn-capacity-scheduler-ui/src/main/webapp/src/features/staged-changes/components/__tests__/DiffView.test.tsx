@@ -16,12 +16,12 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DiffView } from '~/features/staged-changes/components/DiffView';
-import type { StagedChange } from '~/types';
+import type { StagedChange, ValidationIssue } from '~/types';
+import { useSchedulerStore } from '~/stores/schedulerStore';
 
 describe('DiffView', () => {
   const mockOnRevert = vi.fn();
@@ -29,6 +29,7 @@ describe('DiffView', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useSchedulerStore.setState({ serverIssues: [] });
   });
 
   const createMockChange = (overrides: Partial<StagedChange> = {}): StagedChange => ({
@@ -363,156 +364,85 @@ describe('DiffView', () => {
   });
 
   describe('validation errors', () => {
-    it('should display validation errors', () => {
-      const change = createMockChange({
-        validationErrors: [
-          {
-            severity: 'error',
-            message: 'Capacity exceeds 100%',
-            rule: 'capacity-sum',
-            queuePath: 'root.default',
-            field: 'capacity',
-          },
-        ],
-      });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
-      expect(screen.getByText('Capacity exceeds 100%')).toBeInTheDocument();
+    const issue = (overrides: Partial<ValidationIssue>): ValidationIssue => ({
+      queuePath: 'root.default',
+      propertyKey: 'yarn.scheduler.capacity.root.default.capacity',
+      ruleId: 'test-rule',
+      severity: 'error',
+      message: 'Capacity exceeds 100%',
+      ...overrides,
     });
 
-    it('should display validation warnings', () => {
-      const change = createMockChange({
-        validationErrors: [
-          {
-            severity: 'warning',
-            message: 'Capacity is low',
-            rule: 'capacity-low',
-            queuePath: 'root.default',
-            field: 'capacity',
-          },
-        ],
+    it('should display server issues for the key the change writes', () => {
+      useSchedulerStore.setState({
+        serverIssues: [issue({}), issue({ severity: 'warning', message: 'Capacity is low' })],
       });
 
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
+      render(
+        <DiffView change={createMockChange()} onRevert={mockOnRevert} timestamp={mockTimestamp} />,
+      );
 
+      expect(screen.getByText('Capacity exceeds 100%')).toBeInTheDocument();
       expect(screen.getByText('Capacity is low')).toBeInTheDocument();
-    });
-
-    it('should display multiple validation errors', () => {
-      const change = createMockChange({
-        validationErrors: [
-          {
-            severity: 'error',
-            message: 'Capacity exceeds 100%',
-            rule: 'capacity-sum',
-            queuePath: 'root.default',
-            field: 'capacity',
-          },
-          {
-            severity: 'error',
-            message: 'Maximum capacity too low',
-            rule: 'max-capacity-min',
-            queuePath: 'root.default',
-            field: 'maximum-capacity',
-          },
-        ],
-      });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
-      expect(screen.getByText('Capacity exceeds 100%')).toBeInTheDocument();
-      expect(screen.getByText('Maximum capacity too low')).toBeInTheDocument();
-    });
-
-    it('should not display validation section when there are no errors', () => {
-      const change = createMockChange({ validationErrors: [] });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
-      expect(screen.queryByText(/Capacity exceeds/)).not.toBeInTheDocument();
-    });
-
-    it('should not display validation section when validationErrors is undefined', () => {
-      const change = createMockChange({ validationErrors: undefined });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
-      expect(screen.queryByText(/Capacity exceeds/)).not.toBeInTheDocument();
-    });
-
-    it('should display "Validation Error" label for errors', () => {
-      const change = createMockChange({
-        validationErrors: [
-          {
-            severity: 'error',
-            message: 'Test error message',
-            rule: 'test-rule',
-            queuePath: 'root.default',
-            field: 'capacity',
-          },
-        ],
-      });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
       expect(screen.getByText('Validation Error')).toBeInTheDocument();
-    });
-
-    it('should display "Warning" label for warnings', () => {
-      const change = createMockChange({
-        validationErrors: [
-          {
-            severity: 'warning',
-            message: 'Test warning message',
-            rule: 'test-rule',
-            queuePath: 'root.default',
-            field: 'capacity',
-          },
-        ],
-      });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
       expect(screen.getByText('Warning')).toBeInTheDocument();
     });
 
-    it('should show "Affects: queue" when error affects different queue', () => {
-      const change = createMockChange({
-        queuePath: 'root.parent',
-        validationErrors: [
-          {
-            queuePath: 'root.parent.child',
-            field: 'capacity',
-            message: 'Child capacity error',
-            severity: 'error',
-            rule: 'test-rule',
-          },
+    it('should not display issues for other keys or queues', () => {
+      useSchedulerStore.setState({
+        serverIssues: [
+          issue({
+            propertyKey: 'yarn.scheduler.capacity.root.default.maximum-capacity',
+            message: 'Other key',
+          }),
+          issue({
+            queuePath: 'root.other',
+            propertyKey: 'yarn.scheduler.capacity.root.other.capacity',
+            message: 'Other queue',
+          }),
+          issue({ queuePath: null, propertyKey: null, message: 'Global issue' }),
         ],
       });
 
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
+      render(
+        <DiffView change={createMockChange()} onRevert={mockOnRevert} timestamp={mockTimestamp} />,
+      );
 
-      expect(screen.getByText('Affects: root.parent.child')).toBeInTheDocument();
+      expect(screen.queryByText('Other key')).not.toBeInTheDocument();
+      expect(screen.queryByText('Other queue')).not.toBeInTheDocument();
+      expect(screen.queryByText('Global issue')).not.toBeInTheDocument();
     });
 
-    it('should not show "Affects" when error is for same queue', () => {
-      const change = createMockChange({
-        queuePath: 'root.default',
-        validationErrors: [
-          {
-            queuePath: 'root.default',
-            field: 'capacity',
-            message: 'Capacity error',
-            severity: 'error',
-            rule: 'test-rule',
-          },
+    it('should attach global issues to global changes by key', () => {
+      useSchedulerStore.setState({
+        serverIssues: [
+          issue({
+            queuePath: null,
+            propertyKey: 'yarn.scheduler.capacity.maximum-applications',
+            message: 'Global key issue',
+          }),
         ],
+      });
+      const change = createMockChange({
+        queuePath: 'global',
+        property: 'maximum-applications',
+        oldValue: '10000',
+        newValue: '-5',
       });
 
       render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
 
-      expect(screen.queryByText(/Affects:/)).not.toBeInTheDocument();
+      expect(screen.getByText('Global key issue')).toBeInTheDocument();
+    });
+
+    it('should explain a server value that changed under the edit', () => {
+      const change = createMockChange({ baselineDrift: { stagedAgainst: '50', current: '40' } });
+
+      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
+
+      expect(
+        screen.getByText(/changed on the server after this edit was staged/i),
+      ).toBeInTheDocument();
     });
   });
 
@@ -545,9 +475,10 @@ describe('DiffView', () => {
 
   describe('complex scenarios', () => {
     it('should render node label properties correctly', () => {
+      // stageLabelQueueChange stores the label-qualified property name
       const change = createMockChange({
         queuePath: 'root.default',
-        property: 'capacity',
+        property: 'accessible-node-labels.gpu.capacity',
         label: 'gpu',
       });
 
@@ -559,51 +490,6 @@ describe('DiffView', () => {
       );
       // For update type, there should be 2 lines (old and new)
       expect(matches.length).toBe(2);
-    });
-
-    it('should render update with validation errors', () => {
-      const change = createMockChange({
-        type: 'update',
-        oldValue: '50',
-        newValue: '150',
-        validationErrors: [
-          {
-            severity: 'error',
-            message: 'Capacity exceeds 100%',
-            rule: 'capacity-sum',
-            queuePath: 'root.default',
-            field: 'capacity',
-          },
-        ],
-      });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
-      expect(screen.getByText(/capacity=50/)).toBeInTheDocument();
-      expect(screen.getByText(/capacity=150/)).toBeInTheDocument();
-      expect(screen.getByText('Capacity exceeds 100%')).toBeInTheDocument();
-    });
-
-    it('should render add with validation warnings', () => {
-      const change = createMockChange({
-        type: 'add',
-        oldValue: undefined,
-        newValue: '10',
-        validationErrors: [
-          {
-            severity: 'warning',
-            message: 'Capacity is very low',
-            rule: 'capacity-low',
-            queuePath: 'root.default',
-            field: 'capacity',
-          },
-        ],
-      });
-
-      render(<DiffView change={change} onRevert={mockOnRevert} timestamp={mockTimestamp} />);
-
-      expect(screen.getByText(/capacity=10/)).toBeInTheDocument();
-      expect(screen.getByText('Capacity is very low')).toBeInTheDocument();
     });
 
     it('should handle very long values', () => {

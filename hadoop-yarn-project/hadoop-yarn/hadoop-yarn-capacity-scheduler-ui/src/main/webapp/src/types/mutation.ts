@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 export type MutationError = {
   RemoteException: {
     exception: string;
@@ -25,10 +24,56 @@ export type MutationError = {
   };
 };
 
-export type ValidationResponse = {
-  validation: 'success' | 'failed';
-  errors?: string[];
-  versionId?: number | string;
-  mutationId?: number | string;
-  newVersionId?: number | string;
+export type SchedulerValidationSeverity = 'ERROR' | 'WARNING';
+
+/**
+ * One issue from POST /scheduler-conf/validate/v2. A null queuePath means the issue is not
+ * about a single queue; propertyKey is always the fully qualified configuration key.
+ */
+export type SchedulerValidationIssue = {
+  queuePath: string | null;
+  propertyKey: string | null;
+  ruleId: string;
+  severity: SchedulerValidationSeverity;
+  message: string;
 };
+
+/**
+ * Where a resolved queue value comes from, as reported by the explain section of validate/v2.
+ */
+export type ValueSource =
+  | 'QUEUE'
+  | 'TEMPLATE_V2'
+  | 'TEMPLATE_V1'
+  | 'PARENT'
+  | 'GLOBAL'
+  | 'DEFAULT'
+  | 'DERIVED';
+
+export type ExplainedProperty = {
+  key: string;
+  value: string | null;
+  source: ValueSource;
+  sourceDetail: string | null;
+};
+
+export type QueueExplain = {
+  queuePath: string;
+  properties: ExplainedProperty[];
+};
+
+/**
+ * Normalized validate/v2 result. Single-element collections that the REST layer renders as
+ * objects are already turned into arrays.
+ */
+export type ValidationResponse = {
+  valid: boolean;
+  issues: SchedulerValidationIssue[];
+  explain: QueueExplain[];
+};
+
+/**
+ * The explain query parameter of validate/v2: queues touched by the proposal and their
+ * descendants, or an explicit list of queue paths.
+ */
+export type ExplainRequest = 'affected' | string[];
