@@ -43,6 +43,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -109,6 +110,36 @@ public class TestMutableCSConfigurationProvider {
 
     confProvider.formatConfigurationInStore(conf);
     assertNull(confProvider.loadConfiguration(conf)
+        .get("yarn.scheduler.capacity.root.a.goodKey"));
+  }
+
+  @Test
+  public void testStoreAccessRejectedUnderSchedulerWriteLock()
+      throws Exception {
+    Configuration conf = new Configuration();
+    conf.set(YarnConfiguration.SCHEDULER_CONFIGURATION_STORE_CLASS,
+        YarnConfiguration.MEMORY_CONFIGURATION_STORE);
+    confProvider.init(conf);
+    LogMutation pending = confProvider.logAndApplyMutation(TEST_USER,
+        goodUpdate);
+
+    when(cs.isWriteLockHeldByCurrentThread()).thenReturn(true);
+    assertThrows(IllegalStateException.class,
+        () -> confProvider.logAndApplyMutation(TEST_USER, badUpdate));
+    assertThrows(IllegalStateException.class,
+        () -> confProvider.confirmPendingMutation(pending, true));
+    assertThrows(IllegalStateException.class,
+        () -> confProvider.reloadConfigurationFromStore());
+    assertThrows(IllegalStateException.class,
+        () -> confProvider.formatConfigurationInStore(conf));
+    assertThrows(IllegalStateException.class,
+        () -> confProvider.revertToOldConfig(conf));
+    assertNull(confProvider.getConfiguration()
+        .get("yarn.scheduler.capacity.root.a.badKey"));
+
+    when(cs.isWriteLockHeldByCurrentThread()).thenReturn(false);
+    confProvider.confirmPendingMutation(pending, true);
+    assertEquals("goodVal", confProvider.getConfiguration()
         .get("yarn.scheduler.capacity.root.a.goodKey"));
   }
 
