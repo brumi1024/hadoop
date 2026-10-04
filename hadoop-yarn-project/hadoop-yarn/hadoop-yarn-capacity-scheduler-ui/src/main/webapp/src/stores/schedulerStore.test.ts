@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createSchedulerStore } from '~/stores/schedulerStore';
 import { buildMutationRequest } from '~/features/staged-changes/utils/mutationBuilder';
 import type { YarnApiClient } from '~/lib/api/YarnApiClient';
+import { YarnApiError } from '~/lib/errors';
 import type {
   QueueInfo,
   StagedChange,
@@ -339,6 +339,10 @@ const mockVersionResponse: VersionResponse = {
   versionId: 1234567890,
 };
 
+// The legacy PUT answers with plain text; the client resolves to undefined.
+const mockMutationResponse = { etag: null };
+const validProposal = { valid: true, issues: [], explain: [] };
+
 // Mock the YARN API client
 vi.mock('~/lib/api/YarnApiClient');
 
@@ -350,7 +354,7 @@ const createMockApiClient = () => ({
   getNodes: vi.fn(),
   getNodeToLabels: vi.fn(),
   getSchedulerConfVersion: vi.fn(),
-  validateSchedulerConf: vi.fn(),
+  validateSchedulerConf: vi.fn().mockResolvedValue(validProposal),
   updateSchedulerConf: vi.fn(),
   getIsReadOnly: vi.fn(() => false), // Default to writable mode in tests
 });
@@ -366,7 +370,7 @@ async function setupStoreWithData(store: ReturnType<typeof createSchedulerStore>
   const mockApiClient = vi.mocked(store.getState().apiClient);
 
   mockApiClient.getScheduler.mockResolvedValue(mockSchedulerResponse);
-  mockApiClient.getSchedulerConf.mockResolvedValue(mockConfigResponse);
+  mockApiClient.getSchedulerConf.mockResolvedValue({ ...mockConfigResponse, etag: '"etag-1"' });
   mockApiClient.getNodeLabels.mockResolvedValue(mockNodeLabelsResponse);
   mockApiClient.getNodes.mockResolvedValue(mockNodesResponse);
   mockApiClient.getNodeToLabels.mockResolvedValue(mockNodeToLabelsResponse);
@@ -678,7 +682,7 @@ describe('schedulerStore', () => {
         expect(stateChange?.newValue).toBe('RUNNING');
       });
 
-      it('should attach validation errors when addition breaks parent capacity sum', async () => {
+      it('should defer structural validation of queue additions to the server', async () => {
         const store = createTestStore();
         await setupStoreWithData(store);
 
@@ -687,36 +691,6 @@ describe('schedulerStore', () => {
           'maximum-capacity': '100',
           state: 'RUNNING',
         });
-
-        const capacityChange = store
-          .getState()
-          .stagedChanges.find(
-            (change) => change.queuePath === 'root.analytics' && change.property === 'capacity',
-          );
-
-        expect(capacityChange?.validationErrors).toBeDefined();
-        expect(
-          capacityChange?.validationErrors?.some((error) => error.rule === 'child-capacity-sum'),
-        ).toBe(true);
-      });
-
-      it('should update staged sibling errors when multiple additions are staged', async () => {
-        const store = createTestStore();
-        await setupStoreWithData(store);
-
-        store.getState().stageQueueAddition('root', 'analytics', {
-          capacity: '10',
-          'maximum-capacity': '100',
-          state: 'RUNNING',
-        });
-
-        const firstAddition = store
-          .getState()
-          .stagedChanges.find(
-            (change) => change.queuePath === 'root.analytics' && change.property === 'capacity',
-          );
-
-        expect(firstAddition?.validationErrors?.[0].message).toContain('110.0%');
 
         store.getState().stageQueueAddition('root', 'ml', {
           capacity: '10',
@@ -724,13 +698,16 @@ describe('schedulerStore', () => {
           state: 'RUNNING',
         });
 
-        const updatedFirstAddition = store
+        const capacityChanges = store
           .getState()
-          .stagedChanges.find(
-            (change) => change.queuePath === 'root.analytics' && change.property === 'capacity',
+          .stagedChanges.filter(
+            (change) =>
+              (change.queuePath === 'root.analytics' || change.queuePath === 'root.ml') &&
+              change.property === 'capacity',
           );
 
-        expect(updatedFirstAddition?.validationErrors?.[0].message).toContain('120.0%');
+        expect(capacityChanges).toHaveLength(2);
+        expect(store.getState().serverIssues).toEqual([]);
       });
     });
 
@@ -848,58 +825,81 @@ describe('schedulerStore', () => {
   });
 
   describe('applyChanges', () => {
-    it('should send mutation request and reload data on success', async () => {
+    it('should validate, send the mutation with If-Match and reload data on success', async () => {
       const store = createTestStore();
       const mockApiClient = vi.mocked(store.getState().apiClient);
+
+      await setupStoreWithData(store);
+      mockApiClient.getSchedulerConf.mockResolvedValue({ ...mockConfigResponse, etag: '"etag-2"' });
 
       // Stage some changes
       store.getState().stageQueueChange('root.default', 'capacity', '60');
       store.getState().stageGlobalChange(MAXIMUM_APPLICATIONS_PROPERTY, '15000');
 
-      // Mock successful mutation response
       mockApiClient.validateSchedulerConf.mockResolvedValue({
-        validation: 'success',
-        versionId: 12345000,
+        valid: true,
+        issues: [
+          {
+            queuePath: 'root.default',
+            propertyKey: null,
+            ruleId: 'queue-name',
+            severity: 'WARNING',
+            message: 'Queue name contains non-portable characters',
+          },
+        ],
+        explain: [],
       });
-      mockApiClient.validateSchedulerConf.mockResolvedValue({
-        validation: 'success',
-        versionId: 12345000,
-      });
-      mockApiClient.updateSchedulerConf.mockResolvedValue(undefined);
-
-      // Mock reload calls
-      mockApiClient.getScheduler.mockResolvedValue(mockSchedulerResponse);
-      mockApiClient.getSchedulerConf.mockResolvedValue(mockConfigResponse);
-      mockApiClient.getNodeLabels.mockResolvedValue(mockNodeLabelsResponse);
-      mockApiClient.getNodes.mockResolvedValue(mockNodesResponse);
-      mockApiClient.getNodeToLabels.mockResolvedValue(mockNodeToLabelsResponse);
+      mockApiClient.updateSchedulerConf.mockResolvedValue(mockMutationResponse);
       mockApiClient.getSchedulerConfVersion.mockResolvedValue({ versionId: 1234567891 });
 
       await store.getState().applyChanges();
 
-      // Check mutation request was sent
-      expect(mockApiClient.validateSchedulerConf).toHaveBeenCalledTimes(1);
+      expect(mockApiClient.validateSchedulerConf).toHaveBeenCalled();
       expect(mockApiClient.updateSchedulerConf).toHaveBeenCalledTimes(1);
 
-      const updatePayload = mockApiClient.updateSchedulerConf.mock.calls[0]?.[0];
-      expect(updatePayload).toBeDefined();
-      expect(updatePayload?.['global-updates']).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            entry: expect.arrayContaining([
-              expect.objectContaining({
-                key: 'yarn.webservice.mutation-api.version',
-                value: '12345000',
-              }),
-            ]),
-          }),
-        ]),
-      );
+      const [updatePayload, options] = mockApiClient.updateSchedulerConf.mock.calls[0] ?? [];
+      expect(updatePayload?.['global-updates']).toEqual([
+        {
+          entry: [{ key: MAXIMUM_APPLICATIONS_PROPERTY, value: '15000' }],
+        },
+      ]);
+      expect(options).toEqual({ ifMatch: '"etag-1"' });
 
-      // Check staged changes were cleared
+      // Check staged changes were cleared and the new baseline loaded
       expect(store.getState().stagedChanges).toHaveLength(0);
-      // Version should be incremented from initial load
       expect(store.getState().configVersion).toBe(1234567891);
+      expect(store.getState().configEtag).toBe('"etag-2"');
+      expect(store.getState().appliedWarnings).toHaveLength(1);
+    });
+
+    it('should not write when the server rejects the proposal', async () => {
+      const store = createTestStore();
+      const mockApiClient = vi.mocked(store.getState().apiClient);
+
+      store.getState().stageQueueChange('root.default', 'capacity', '60');
+
+      mockApiClient.validateSchedulerConf.mockResolvedValue({
+        valid: false,
+        issues: [
+          {
+            queuePath: 'root.default',
+            propertyKey: 'yarn.scheduler.capacity.root.default.capacity',
+            ruleId: 'children-capacity-sum',
+            severity: 'ERROR',
+            message: 'Child queue capacities must sum to 100%',
+          },
+        ],
+        explain: [],
+      });
+
+      await expect(store.getState().applyChanges()).rejects.toBeDefined();
+
+      expect(mockApiClient.updateSchedulerConf).not.toHaveBeenCalled();
+      expect(store.getState().stagedChanges).toHaveLength(1);
+      expect(store.getState().applyError).toBe(
+        'Validation failed: Child queue capacities must sum to 100%',
+      );
+      expect(store.getState().serverIssues).toHaveLength(1);
     });
 
     it('should handle mutation failures without clearing changes', async () => {
@@ -908,9 +908,8 @@ describe('schedulerStore', () => {
 
       store.getState().stageQueueChange('root.default', 'capacity', '60');
 
-      mockApiClient.validateSchedulerConf.mockResolvedValue({ validation: 'success' });
       mockApiClient.updateSchedulerConf.mockRejectedValue(
-        new Error('HTTP 400: Invalid configuration'),
+        new YarnApiError('HTTP 400: Invalid configuration', 400, 'http'),
       );
 
       // Call applyChanges and expect it to throw
@@ -923,7 +922,7 @@ describe('schedulerStore', () => {
 
       expect(error).toBeDefined();
 
-      expect(mockApiClient.validateSchedulerConf).toHaveBeenCalledTimes(1);
+      expect(mockApiClient.updateSchedulerConf).toHaveBeenCalledTimes(1);
 
       // Changes should not be cleared on failure
       expect(store.getState().stagedChanges).toHaveLength(1);
@@ -938,9 +937,8 @@ describe('schedulerStore', () => {
 
       store.getState().stageQueueChange('root.default', 'capacity', '60');
 
-      mockApiClient.validateSchedulerConf.mockResolvedValue({ validation: 'success' });
       mockApiClient.updateSchedulerConf.mockRejectedValue(
-        new Error('HTTP 400: Invalid configuration'),
+        new YarnApiError('HTTP 400: Invalid configuration', 400, 'http'),
       );
 
       await expect(store.getState().applyChanges()).rejects.toBeDefined();
@@ -965,11 +963,7 @@ describe('schedulerStore', () => {
         state: 'RUNNING',
       });
 
-      mockApiClient.validateSchedulerConf.mockResolvedValue({
-        validation: 'success',
-        versionId: 98765,
-      });
-      mockApiClient.updateSchedulerConf.mockResolvedValue(undefined);
+      mockApiClient.updateSchedulerConf.mockResolvedValue(mockMutationResponse);
 
       mockApiClient.getScheduler.mockResolvedValue(mockSchedulerResponse);
       mockApiClient.getSchedulerConf.mockResolvedValue(mockConfigResponse);
@@ -980,7 +974,6 @@ describe('schedulerStore', () => {
 
       await store.getState().applyChanges();
 
-      expect(mockApiClient.validateSchedulerConf).toHaveBeenCalledTimes(1);
       expect(mockApiClient.updateSchedulerConf).toHaveBeenCalledTimes(4);
 
       const [stopPayload, finalPayload, restartPayload, childStartPayload] =
@@ -1011,18 +1004,7 @@ describe('schedulerStore', () => {
       );
 
       expect(finalPayload?.['add-queue']).toBeDefined();
-      expect(finalPayload?.['global-updates']).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            entry: expect.arrayContaining([
-              expect.objectContaining({
-                key: 'yarn.webservice.mutation-api.version',
-                value: '98765',
-              }),
-            ]),
-          }),
-        ]),
-      );
+      expect(finalPayload?.['global-updates']).toBeUndefined();
 
       expect(restartPayload?.['update-queue']).toHaveLength(3);
       expect(restartPayload?.['update-queue']).toEqual(
@@ -1070,11 +1052,7 @@ describe('schedulerStore', () => {
         .getState()
         .stageQueueChange('root.production', AUTO_CREATION_PROPS.LEGACY_ENABLED, 'true');
 
-      mockApiClient.validateSchedulerConf.mockResolvedValue({
-        validation: 'success',
-        versionId: 24680,
-      });
-      mockApiClient.updateSchedulerConf.mockResolvedValue(undefined);
+      mockApiClient.updateSchedulerConf.mockResolvedValue(mockMutationResponse);
 
       mockApiClient.getScheduler.mockResolvedValue(mockSchedulerResponse);
       mockApiClient.getSchedulerConf.mockResolvedValue(mockConfigResponse);
@@ -1129,18 +1107,7 @@ describe('schedulerStore', () => {
           }),
         ]),
       );
-      expect(autoCreationUpdatePayload?.['global-updates']).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            entry: expect.arrayContaining([
-              expect.objectContaining({
-                key: 'yarn.webservice.mutation-api.version',
-                value: '24680',
-              }),
-            ]),
-          }),
-        ]),
-      );
+      expect(autoCreationUpdatePayload?.['global-updates']).toBeUndefined();
 
       expect(restartPayload?.['update-queue']).toHaveLength(3);
       expect(restartPayload?.['update-queue']).toEqual(
@@ -1176,11 +1143,7 @@ describe('schedulerStore', () => {
         .getState()
         .stageQueueChange('root.production', AUTO_CREATION_PROPS.FLEXIBLE_ENABLED, 'true');
 
-      mockApiClient.validateSchedulerConf.mockResolvedValue({
-        validation: 'success',
-        versionId: 97531,
-      });
-      mockApiClient.updateSchedulerConf.mockResolvedValue(undefined);
+      mockApiClient.updateSchedulerConf.mockResolvedValue(mockMutationResponse);
 
       mockApiClient.getScheduler.mockResolvedValue(mockSchedulerResponse);
       mockApiClient.getSchedulerConf.mockResolvedValue(mockConfigResponse);
@@ -1270,11 +1233,7 @@ describe('schedulerStore', () => {
 
       store.getState().stageQueueRemoval('root.production.batch');
 
-      mockApiClient.validateSchedulerConf.mockResolvedValue({
-        validation: 'success',
-        versionId: 13579,
-      });
-      mockApiClient.updateSchedulerConf.mockResolvedValue(undefined);
+      mockApiClient.updateSchedulerConf.mockResolvedValue(mockMutationResponse);
 
       mockApiClient.getScheduler.mockResolvedValue(mockSchedulerResponse);
       mockApiClient.getSchedulerConf.mockResolvedValue(mockConfigResponse);
@@ -1285,7 +1244,6 @@ describe('schedulerStore', () => {
 
       await store.getState().applyChanges();
 
-      expect(mockApiClient.validateSchedulerConf).toHaveBeenCalledTimes(1);
       expect(mockApiClient.updateSchedulerConf).toHaveBeenCalledTimes(2);
 
       const stopPayload = mockApiClient.updateSchedulerConf.mock.calls[0][0];
@@ -1302,18 +1260,7 @@ describe('schedulerStore', () => {
 
       const removalPayload = mockApiClient.updateSchedulerConf.mock.calls[1][0];
       expect(removalPayload?.['remove-queue']).toBe('root.production.batch');
-      expect(removalPayload?.['global-updates']).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            entry: expect.arrayContaining([
-              expect.objectContaining({
-                key: 'yarn.webservice.mutation-api.version',
-                value: '13579',
-              }),
-            ]),
-          }),
-        ]),
-      );
+      expect(removalPayload?.['global-updates']).toBeUndefined();
     });
   });
 

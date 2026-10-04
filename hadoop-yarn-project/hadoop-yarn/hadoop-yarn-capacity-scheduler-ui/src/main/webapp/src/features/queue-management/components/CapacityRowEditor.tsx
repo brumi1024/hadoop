@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Capacity row editor
  *
@@ -150,7 +149,7 @@ export const CapacityRowEditor: React.FC<CapacityRowEditorProps> = ({
               <div className="mt-2 space-y-1">
                 {capacityIssues.map((issue) => (
                   <FieldMessage
-                    key={`${issue.rule}-${issue.field}`}
+                    key={`${issue.ruleId}-${issue.propertyKey}-${issue.message}`}
                     className={
                       issue.severity === 'error'
                         ? 'text-[11px] text-destructive'
@@ -189,7 +188,7 @@ export const CapacityRowEditor: React.FC<CapacityRowEditorProps> = ({
               <div className="mt-2 space-y-1">
                 {maxCapacityIssues.map((issue) => (
                   <FieldMessage
-                    key={`${issue.rule}-${issue.field}`}
+                    key={`${issue.ruleId}-${issue.propertyKey}-${issue.message}`}
                     className={
                       issue.severity === 'error'
                         ? 'text-[11px] text-destructive'
