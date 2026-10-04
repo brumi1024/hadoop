@@ -34,7 +34,6 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueLab
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueStructureChecks;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.queuemanagement.GuaranteedOrZeroCapacityOverTimePolicy;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.QueueConfigResolver;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.QueueProperty.Kind;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.Resolved;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.ResolvedQueueConfig;
@@ -90,8 +89,7 @@ public final class NodeLabelRule implements ValidationRule {
             e));
       }
     } else {
-      labelsByQueue = QueueConfigResolver.configuredNodeLabelsByQueue(
-          context.getProposed());
+      labelsByQueue = context.getConfiguredNodeLabelsByQueue();
     }
     if (context.getProposed().get(
         RuleSupport.key(root, ACCESSIBLE_NODE_LABELS, "")) != null) {
