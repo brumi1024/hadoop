@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React, { useState, useImperativeHandle, useMemo, useCallback } from 'react';
 import { Badge } from '~/components/ui/badge';
 import { Button } from '~/components/ui/button';
@@ -101,11 +100,10 @@ export const PropertyEditorTab = ({
     propertiesByCategory,
     getStagedStatus,
     formState,
-    handleFieldBlur,
     getFieldErrors,
     getFieldWarnings,
     properties,
-    getInheritanceInfo,
+    getExplained,
   } = usePropertyEditor({
     queuePath: queue.queuePath,
   });
@@ -423,14 +421,13 @@ export const PropertyEditorTab = ({
                               control={control}
                               stagedStatus={getStagedStatus(prop.originalName || prop.name)}
                               isEnabled={(propertyState?.enabled ?? true) && !isPendingDeletion}
-                              onBlur={handleFieldBlur}
                               errors={getFieldErrors(prop.formFieldName || prop.name)}
                               warnings={getFieldWarnings(prop.formFieldName || prop.name)}
                               queuePath={queue.queuePath}
                               queueName={queue.queueName}
                               parentQueuePath={parentQueuePath}
                               currentValues={watchedValues}
-                              inheritanceInfo={getInheritanceInfo(prop.originalName || prop.name)}
+                              explained={getExplained(prop.originalName || prop.name)}
                             />
                             {shouldRenderTemplateButton && (
                               <div className="pt-1">

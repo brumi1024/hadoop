@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Scheduler data slice - handles loading and storing scheduler configuration
  */
@@ -41,6 +40,7 @@ export const createSchedulerDataSlice: StateCreator<
   schedulerData: null,
   configData: new Map(),
   configVersion: 0,
+  configEtag: null,
   isLoading: false,
   error: null,
   errorContext: null,
@@ -75,6 +75,7 @@ export const createSchedulerDataSlice: StateCreator<
         state.nodeToLabels = normalizeNodeToLabels(nodeToLabels);
 
         state.configVersion = version.versionId;
+        state.configEtag = config.etag ?? null;
         state.isReadOnly = get().apiClient.getIsReadOnly();
         state.isLoading = false;
         if (state.errorContext === 'load') {

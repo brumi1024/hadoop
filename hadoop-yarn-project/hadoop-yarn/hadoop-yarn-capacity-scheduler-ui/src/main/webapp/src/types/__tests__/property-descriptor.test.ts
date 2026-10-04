@@ -16,12 +16,10 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect } from 'vitest';
 import type {
   PropertyDescriptor,
   PropertyType,
-  ValidationRule,
   PropertyCategory,
 } from '~/types/property-descriptor';
 
@@ -44,8 +42,8 @@ describe('PropertyDescriptor interface', () => {
     expect(descriptor.required).toBe(true);
   });
 
-  it('should handle property with validation rules', () => {
-    const descriptorWithValidation: PropertyDescriptor = {
+  it('should handle property with an input range', () => {
+    const descriptorWithRange: PropertyDescriptor = {
       name: 'maximum-capacity',
       displayName: 'Maximum Capacity',
       description: 'The maximum percentage of cluster resources this queue can use',
@@ -53,25 +51,10 @@ describe('PropertyDescriptor interface', () => {
       category: 'resource',
       defaultValue: '100',
       required: false,
-      validationRules: [
-        {
-          type: 'range',
-          min: 0,
-          max: 100,
-          message: 'Maximum capacity must be between 0 and 100',
-        },
-        {
-          type: 'comparison',
-          field: 'capacity',
-          operator: '>=',
-          message: 'Maximum capacity must be greater than or equal to capacity',
-        },
-      ],
+      inputRange: { min: 0, max: 100 },
     };
 
-    expect(descriptorWithValidation.validationRules).toHaveLength(2);
-    expect(descriptorWithValidation.validationRules?.[0].type).toBe('range');
-    expect(descriptorWithValidation.validationRules?.[1].type).toBe('comparison');
+    expect(descriptorWithRange.inputRange).toEqual({ min: 0, max: 100 });
   });
 
   it('should handle boolean property descriptor', () => {
@@ -107,29 +90,6 @@ describe('PropertyDescriptor interface', () => {
     expect(enumDescriptor.type).toBe('enum');
     expect(enumDescriptor.enumValues?.some((option) => option.value === 'RUNNING')).toBe(true);
     expect(enumDescriptor.enumValues?.some((option) => option.value === 'STOPPED')).toBe(true);
-  });
-
-  it('should handle string property with pattern validation', () => {
-    const stringWithPattern: PropertyDescriptor = {
-      name: 'acl-submit-applications',
-      displayName: 'Submit Applications ACL',
-      description: 'Users and groups allowed to submit applications',
-      type: 'string',
-      category: 'security',
-      defaultValue: '*',
-      required: false,
-      validationRules: [
-        {
-          type: 'pattern',
-          pattern: '^[a-zA-Z0-9,_\\-\\*\\s]+$',
-          message:
-            'ACL must contain only alphanumeric characters, commas, hyphens, underscores, and asterisks',
-        },
-      ],
-    };
-
-    expect(stringWithPattern.validationRules?.[0].type).toBe('pattern');
-    expect(stringWithPattern.validationRules?.[0].pattern).toBeDefined();
   });
 
   it('should handle property dependent on other properties', () => {
@@ -237,62 +197,6 @@ describe('PropertyDescriptor interface', () => {
     };
 
     expect(templateProperty.templateSupport).toBe(true);
-  });
-});
-
-describe('ValidationRule interface', () => {
-  it('should handle range validation', () => {
-    const rangeRule: ValidationRule = {
-      type: 'range',
-      min: 0,
-      max: 100,
-      message: 'Value must be between 0 and 100',
-    };
-
-    expect(rangeRule.type).toBe('range');
-    expect(rangeRule.min).toBe(0);
-    expect(rangeRule.max).toBe(100);
-  });
-
-  it('should handle pattern validation', () => {
-    const patternRule: ValidationRule = {
-      type: 'pattern',
-      pattern: '^[a-zA-Z][a-zA-Z0-9_-]*$',
-      message:
-        'Must start with a letter and contain only alphanumeric characters, hyphens, and underscores',
-    };
-
-    expect(patternRule.type).toBe('pattern');
-    expect(patternRule.pattern).toBeDefined();
-  });
-
-  it('should handle comparison validation', () => {
-    const comparisonRule: ValidationRule = {
-      type: 'comparison',
-      field: 'capacity',
-      operator: '<=',
-      message: 'Value must be less than or equal to capacity',
-    };
-
-    expect(comparisonRule.type).toBe('comparison');
-    expect(comparisonRule.field).toBe('capacity');
-    expect(comparisonRule.operator).toBe('<=');
-  });
-
-  it('should handle custom validation', () => {
-    const customRule: ValidationRule = {
-      type: 'custom',
-      validator: (value: string) => {
-        const num = parseFloat(value);
-        return !isNaN(num) && num % 10 === 0;
-      },
-      message: 'Value must be a multiple of 10',
-    };
-
-    expect(customRule.type).toBe('custom');
-    expect(customRule.validator).toBeDefined();
-    expect(customRule.validator?.('20')).toBe(true);
-    expect(customRule.validator?.('25')).toBe(false);
   });
 });
 
