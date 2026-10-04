@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { Outlet, useLocation } from 'react-router';
 import { useState, useEffect } from 'react';
 import { useSchedulerStore } from '~/stores/schedulerStore';
@@ -40,6 +39,7 @@ export default function Layout() {
   const [isApplying, setIsApplying] = useState(false);
   const loadInitialData = useSchedulerStore((state) => state.loadInitialData);
   const stagedChanges = useSchedulerStore((state) => state.stagedChanges);
+  const serverIssues = useSchedulerStore((state) => state.serverIssues);
   const setSearchContext = useSchedulerStore((state) => state.setSearchContext);
   const isReadOnly = useSchedulerStore((state) => state.isReadOnly);
   const applyChanges = useSchedulerStore((state) => state.applyChanges);
@@ -69,9 +69,7 @@ export default function Layout() {
   }, [location.pathname, setSearchContext]);
 
   // Calculate if there are validation errors blocking apply
-  const hasValidationErrors = stagedChanges.some((change) =>
-    change.validationErrors?.some((error) => error.severity === 'error'),
-  );
+  const hasValidationErrors = serverIssues.some((issue) => issue.severity === 'error');
 
   // Global keyboard shortcuts for staged changes
   useKeyboardShortcuts([

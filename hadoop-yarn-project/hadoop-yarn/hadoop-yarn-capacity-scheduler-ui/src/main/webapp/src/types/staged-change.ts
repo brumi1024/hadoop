@@ -16,9 +16,6 @@
  * limitations under the License.
  */
 
-
-import type { ValidationIssue } from './validation';
-
 export type StagedChangeType = 'add' | 'update' | 'remove';
 
 export type StagedChange = {
@@ -30,6 +27,6 @@ export type StagedChange = {
   newValue?: string;
   timestamp: number;
   label?: string; // Used for node label changes
-  // Validation errors associated with this change
-  validationErrors?: ValidationIssue[];
+  // Set when a reload showed that the server value changed after this edit was staged
+  baselineDrift?: { stagedAgainst?: string; current?: string };
 };

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { cn } from '~/utils/cn';
 
 interface QueueCardStyleParams {
@@ -25,7 +24,6 @@ interface QueueCardStyleParams {
   isSelectedQueue: boolean;
   isSelectedForComparison: boolean;
   validationErrors: Array<{ severity: string }> | undefined;
-  isAffectedByErrors: boolean | undefined;
   shouldGrayOut: boolean;
 }
 
@@ -36,7 +34,6 @@ export function getQueueCardClassName(params: QueueCardStyleParams): string {
     isSelectedQueue,
     isSelectedForComparison,
     validationErrors,
-    isAffectedByErrors,
     shouldGrayOut,
   } = params;
 
@@ -68,13 +65,8 @@ export function getQueueCardClassName(params: QueueCardStyleParams): string {
     !stagedStatus && isSelectedQueue && 'ring-2 ring-primary shadow-primary/10',
     // Ring for validation errors (can coexist with staged status border)
     hasErrors && 'ring-2 ring-destructive',
-    // Left border for affected queues only if no staged status
+    // Add a left border for queues with direct errors when there is no staged status.
     !stagedStatus && hasErrors && 'border-l-4 border-l-destructive',
-    isAffectedByErrors &&
-      !validationErrors &&
-      !stagedStatus &&
-      'ring-2 ring-amber-500 border-l-4 border-l-amber-500',
-    isAffectedByErrors && !validationErrors && stagedStatus && 'ring-2 ring-amber-500',
     // Background styling for states
     isSelectedQueue &&
       'from-primary/10 to-primary/5 dark:from-primary/15 dark:to-primary/5 scale-[1.01]',

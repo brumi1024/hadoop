@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createSchedulerStore } from '~/stores/schedulerStore';
 import { YarnApiClient } from '~/lib/api/YarnApiClient';
@@ -32,17 +31,12 @@ vi.mock('~/features/queue-management/utils/capacityEditor', () => ({
   DEFAULT_PARTITION_VALUE: '',
 }));
 
-vi.mock('~/features/validation/service', () => ({
-  validateQueue: vi.fn(),
-}));
-
 import {
   buildCapacityEditorDrafts,
   buildCapacityEditorLabelOptions,
   convertVectorDraftToString,
   getPropertyNameForLabel,
 } from '~/features/queue-management/utils/capacityEditor';
-import { validateQueue } from '~/features/validation/service';
 
 describe('capacityEditorSlice', () => {
   const createTestStore = () => {
@@ -82,10 +76,6 @@ describe('capacityEditorSlice', () => {
         return `accessible-node-labels.${label}.${property}`;
       }
       return property;
-    });
-    vi.mocked(validateQueue).mockReturnValue({
-      valid: true,
-      issues: [],
     });
   });
 
@@ -571,14 +561,6 @@ describe('capacityEditorSlice', () => {
   });
 
   describe('saveCapacityDrafts', () => {
-    beforeEach(() => {
-      // Setup store with necessary methods
-      vi.mocked(validateQueue).mockReturnValue({
-        valid: true,
-        issues: [],
-      });
-    });
-
     it('should return false if editor not initialized', async () => {
       const store = createTestStore();
 
@@ -645,105 +627,20 @@ describe('capacityEditorSlice', () => {
       expect(store.getState().capacityEditor.isSaving).toBe(false);
     });
 
-    it('should validate all changed queues', async () => {
-      const store = createTestStore();
-
-      const mockDrafts = [createMockDraft({ queuePath: 'root.default', capacityValue: '60' })];
-      vi.mocked(buildCapacityEditorDrafts).mockReturnValue(mockDrafts);
-
-      store.setState({
-        configData: new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]),
-        stagedChanges: [],
-        schedulerData: null,
-        stageQueueChange: vi.fn(),
-        stageLabelQueueChange: vi.fn(),
-        getQueuePropertyValue: vi.fn(() => ({ value: '50', isStaged: false })),
-      });
-
-      store.getState().openCapacityEditor({
-        origin: 'property-editor',
-        parentQueuePath: 'root',
-        originQueuePath: 'root.default',
-        originQueueName: 'default',
-      });
-
-      await store.getState().saveCapacityDrafts();
-
-      expect(validateQueue).toHaveBeenCalledWith({
-        queuePath: 'root.default',
-        properties: expect.objectContaining({
-          capacity: '60',
-        }),
-        configData: expect.any(Map),
-        stagedChanges: [],
-        schedulerData: null,
-      });
-    });
-
-    it('should return false on validation error without force', async () => {
-      const store = createTestStore();
-
-      const mockDrafts = [createMockDraft({ queuePath: 'root.default', capacityValue: '150' })];
-      vi.mocked(buildCapacityEditorDrafts).mockReturnValue(mockDrafts);
-
-      vi.mocked(validateQueue).mockReturnValue({
-        valid: false,
-        issues: [
-          {
-            queuePath: 'root.default',
-            field: 'capacity',
-            message: 'Capacity exceeds maximum',
-            severity: 'error',
-            rule: 'max-capacity',
-          },
-        ],
-      });
-
-      store.setState({
-        getQueuePropertyValue: vi.fn(() => ({ value: '50', isStaged: false })),
-        stageQueueChange: vi.fn(),
-        stageLabelQueueChange: vi.fn(),
-      });
-
-      store.getState().openCapacityEditor({
-        origin: 'property-editor',
-        parentQueuePath: 'root',
-        originQueuePath: 'root.default',
-        originQueueName: 'default',
-      });
-
-      const result = await store.getState().saveCapacityDrafts();
-
-      expect(result).toBe(false);
-      expect(store.getState().capacityEditor.saveError).toBe('Capacity validation failed.');
-      expect(store.getState().capacityEditor.validationIssues).toHaveLength(1);
-    });
-
-    it('should proceed with save when force is true despite validation errors', async () => {
+    it('should stage changed queues without client-side validation', async () => {
       const store = createTestStore();
 
       const mockDrafts = [createMockDraft({ queuePath: 'root.default', capacityValue: '150' })];
       vi.mocked(buildCapacityEditorDrafts).mockReturnValue(mockDrafts);
 
       const stageQueueChange = vi.fn();
-
-      vi.mocked(validateQueue).mockReturnValue({
-        valid: false,
-        issues: [
-          {
-            queuePath: 'root.default',
-            field: 'capacity',
-            message: 'Capacity exceeds maximum',
-            severity: 'error',
-            rule: 'max-capacity',
-          },
-        ],
-      });
-
       store.setState({
-        getQueuePropertyValue: vi.fn(() => ({ value: '50', isStaged: false })),
+        configData: new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]),
+        stagedChanges: [],
+        schedulerData: null,
         stageQueueChange,
         stageLabelQueueChange: vi.fn(),
+        getQueuePropertyValue: vi.fn(() => ({ value: '50', isStaged: false })),
       });
 
       store.getState().openCapacityEditor({
@@ -753,10 +650,10 @@ describe('capacityEditorSlice', () => {
         originQueueName: 'default',
       });
 
-      const result = await store.getState().saveCapacityDrafts({ force: true });
-
-      expect(result).toBe(true);
-      expect(stageQueueChange).toHaveBeenCalled();
+      // The server validates the staged proposal; an out-of-range value is still staged.
+      await expect(store.getState().saveCapacityDrafts()).resolves.toBe(true);
+      expect(stageQueueChange).toHaveBeenCalledWith('root.default', 'capacity', '150');
+      expect(store.getState().capacityEditor.saveError).toBeNull();
     });
 
     it('should clear draft cache after successful save', async () => {
@@ -827,7 +724,6 @@ describe('capacityEditorSlice', () => {
         'root.default',
         'capacity',
         '[memory=2048,vcores=4]',
-        undefined,
       );
     });
 
@@ -860,13 +756,7 @@ describe('capacityEditorSlice', () => {
 
       await store.getState().saveCapacityDrafts();
 
-      expect(stageLabelQueueChange).toHaveBeenCalledWith(
-        'root.default',
-        'gpu',
-        'capacity',
-        '60',
-        undefined,
-      );
+      expect(stageLabelQueueChange).toHaveBeenCalledWith('root.default', 'gpu', 'capacity', '60');
     });
   });
 });

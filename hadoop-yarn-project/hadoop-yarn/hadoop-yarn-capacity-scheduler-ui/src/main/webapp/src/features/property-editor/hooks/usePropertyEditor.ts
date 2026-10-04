@@ -16,65 +16,24 @@
  * limitations under the License.
  */
 
-
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useEffect, useMemo, useRef } from 'react';
 import { useSchedulerStore } from '~/stores/schedulerStore';
-import type { PropertyDescriptor, ValidationRule } from '~/types/property-descriptor';
+import type { PropertyDescriptor } from '~/types/property-descriptor';
 import { queuePropertyDefinitions } from '~/config/properties/queue-properties';
 import { toast } from 'sonner';
-import { useValidation } from '~/contexts/ValidationContext';
-import { validateQueue, hasBlockingIssues, splitIssues } from '~/features/validation/service';
-import type { ValidationIssue } from '~/types';
-import { isBlockingError } from '~/features/validation/ruleCategories';
-import type { FieldErrors } from 'react-hook-form';
-
-type CombinedError = { type: string; message: string };
-
-function mergeFormAndValidationErrors(
-  zodErrors: FieldErrors,
-  queueIssues: Record<string, ValidationIssue[]>,
-  normalizeFieldName: (field: string) => string,
-): Record<string, CombinedError> {
-  const combined: Record<string, CombinedError> = {};
-
-  // Add Zod errors
-  Object.entries(zodErrors).forEach(([field, error]) => {
-    if (!error) return;
-    const normalizedField = normalizeFieldName(field);
-    combined[normalizedField] = {
-      type: typeof error.type === 'string' ? error.type : 'validation',
-      message: typeof error.message === 'string' ? error.message : 'Validation error',
-    };
-  });
-
-  // Merge validation errors
-  Object.entries(queueIssues).forEach(([field, issues]) => {
-    const { errors } = splitIssues(issues);
-    if (errors.length === 0) return;
-
-    const errorMessage = errors.map((e) => e.message).join('. ');
-    const existing = combined[field];
-
-    if (existing) {
-      combined[field] = {
-        ...existing,
-        message: existing.message ? `${existing.message}. ${errorMessage}` : errorMessage,
-      };
-    } else {
-      combined[field] = { type: 'business', message: errorMessage };
-    }
-  });
-
-  return combined;
-}
-import { validatePropertyChange } from '~/features/validation/crossQueue';
-import { buildPropertyKey } from '~/utils/propertyUtils';
+import {
+  getExplainedProperty,
+  getIssuePropertyName,
+  getPropertyIssues,
+  getQueueIssues,
+} from '~/features/validation/service';
+import type { ExplainedProperty, ValidationIssue } from '~/types';
 import { CONFIG_PREFIXES } from '~/types';
-import { resolveInheritedValue, type InheritedValueInfo } from '~/utils/resolveInheritedValue';
 
+// Field values are plain strings; the server validates them after they are staged.
 function createFormSchema(
   properties: Array<
     PropertyDescriptor & {
@@ -86,48 +45,9 @@ function createFormSchema(
   const schemaFields: Record<string, z.ZodType> = {};
 
   properties.forEach((property) => {
-    let fieldSchema: z.ZodType = z.string();
-
-    if (property.validationRules) {
-      property.validationRules.forEach((rule: ValidationRule) => {
-        switch (rule.type) {
-          case 'range':
-            if (property.type === 'number') {
-              fieldSchema = z.string().refine(
-                (value) => {
-                  if (!value.trim()) return !property.required;
-                  const num = parseFloat(value);
-                  return (
-                    !isNaN(num) &&
-                    (rule.min === undefined || num >= rule.min) &&
-                    (rule.max === undefined || num <= rule.max)
-                  );
-                },
-                { message: rule.message },
-              );
-            }
-            break;
-          case 'pattern':
-            if (rule.pattern) {
-              fieldSchema = z.string().regex(new RegExp(rule.pattern), rule.message);
-            }
-            break;
-          case 'custom':
-            if (rule.validator) {
-              fieldSchema = z.string().refine(rule.validator, { message: rule.message });
-            }
-            break;
-        }
-      });
-    }
-
-    if (!property.required) {
-      fieldSchema = fieldSchema.optional().or(z.literal(''));
-    }
-
     // Use escaped field name for React Hook Form to prevent dot notation conflicts
     const fieldName = property.formFieldName || property.name;
-    schemaFields[fieldName] = fieldSchema;
+    schemaFields[fieldName] = property.required ? z.string() : z.string().optional();
   });
 
   return z.object(schemaFields);
@@ -142,8 +62,13 @@ export function usePropertyEditor({
   queuePath,
   properties = queuePropertyDefinitions,
 }: UsePropertyEditorOptions) {
-  const { getQueuePropertyValue, stageQueueChange, clearQueueChanges, schedulerData, configData } =
+  const { getQueuePropertyValue, stageQueueChange, clearQueueChanges, configData } =
     useSchedulerStore();
+  const serverIssues = useSchedulerStore((state) => state.serverIssues);
+  const explain = useSchedulerStore((state) => state.explain);
+  const proposalKey = useSchedulerStore((state) => state.proposalKey);
+  const isValidatingProposal = useSchedulerStore((state) => state.isValidatingProposal);
+  const loadExplain = useSchedulerStore((state) => state.loadExplain);
 
   const stagedChanges = useSchedulerStore((state) => state.stagedChanges);
   const cleanResetRef = useRef(false);
@@ -169,19 +94,16 @@ export function usePropertyEditor({
     [properties],
   );
 
-  const knownFieldNames = useMemo(
-    () => new Set(allProperties.map((property) => property.originalName || property.name)),
-    [allProperties],
-  );
-
   const formSchema = useMemo(() => createFormSchema(allProperties), [allProperties]);
 
-  const {
-    errors: validationState,
-    validateField: runContextValidation,
-    replaceQueueIssues,
-    clearQueueErrors,
-  } = useValidation();
+  // Source labels for this queue come from the explain section of validate/v2. Runs when
+  // the proposal or its validation state changes, never on the explain index it fills: the
+  // server omits queues that are not in the proposed tree, so the entry may never appear.
+  useEffect(() => {
+    if (queuePath) {
+      void loadExplain(queuePath);
+    }
+  }, [queuePath, proposalKey, isValidatingProposal, loadExplain]);
 
   const form = useForm({
     resolver: zodResolver(formSchema),
@@ -190,7 +112,7 @@ export function usePropertyEditor({
     criteriaMode: 'all', // Show all validation errors
   });
 
-  const { control, handleSubmit, reset, getValues } = form;
+  const { control, handleSubmit, reset } = form;
 
   const watchedValues = useWatch({ control });
 
@@ -206,11 +128,8 @@ export function usePropertyEditor({
     return field.replace(/__DOT__/g, '.');
   };
 
-  const getFieldIssues = (field: string): ValidationIssue[] => {
-    const normalized = normalizeFieldName(field);
-    const queueIssues = validationState[queuePath];
-    return queueIssues?.[normalized] ?? [];
-  };
+  const getFieldIssues = (field: string): ValidationIssue[] =>
+    getPropertyIssues(serverIssues, queuePath, normalizeFieldName(field));
 
   const getFieldErrors = (field: string): string[] => {
     return getFieldIssues(field)
@@ -250,29 +169,11 @@ export function usePropertyEditor({
     return isStaged ? 'modified' : undefined;
   };
 
-  const getInheritanceInfo = (propertyName: string): InheritedValueInfo | null => {
-    const property = allProperties.find(
-      (p) => p.originalName === propertyName || p.name === propertyName,
-    );
-    if (!property?.inheritanceResolver) {
-      return null;
-    }
+  const getExplained = (propertyName: string): ExplainedProperty | null =>
+    getExplainedProperty(explain, queuePath, propertyName);
 
-    return resolveInheritedValue({
-      queuePath,
-      propertyName,
-      configData,
-      stagedChanges,
-      inheritanceResolver: property.inheritanceResolver,
-    });
-  };
-
-  const stageChange = (
-    propertyName: string,
-    value: string,
-    validationErrors?: ValidationIssue[],
-  ) => {
-    stageQueueChange(queuePath, propertyName, value, validationErrors);
+  const stageChange = (propertyName: string, value: string) => {
+    stageQueueChange(queuePath, propertyName, value);
   };
 
   const collectTemplateMatches = <T>(
@@ -375,74 +276,6 @@ export function usePropertyEditor({
     return removals;
   };
 
-  const handleFieldBlur = (
-    propertyName: string,
-    value: string,
-    options?: {
-      validationOverrides?: Array<{ queuePath: string; field: string; value: string }>;
-    },
-  ) => {
-    const normalizedName = normalizeFieldName(propertyName);
-    if (!knownFieldNames.has(normalizedName)) {
-      return;
-    }
-    const normalizedValue = typeof value === 'string' ? value : value == null ? '' : String(value);
-
-    const pendingValues: Array<{ queuePath?: string; fieldName: string; value: unknown }> = [];
-
-    const collectOverrides = (dirtyEntry: unknown, fieldKey: string) => {
-      if (!dirtyEntry) {
-        return;
-      }
-
-      if (dirtyEntry === true) {
-        const normalizedField = normalizeFieldName(fieldKey);
-        if (!knownFieldNames.has(normalizedField)) {
-          return;
-        }
-        if (normalizedField === normalizedName) {
-          return;
-        }
-        const currentValue = getValues(fieldKey);
-        const currentValueAsString =
-          typeof currentValue === 'string'
-            ? currentValue
-            : currentValue == null
-              ? ''
-              : String(currentValue);
-        pendingValues.push({
-          queuePath,
-          fieldName: normalizedField,
-          value: currentValueAsString,
-        });
-        return;
-      }
-
-      if (typeof dirtyEntry === 'object') {
-        Object.entries(dirtyEntry as Record<string, unknown>).forEach(([childKey, childValue]) => {
-          const nextKey = fieldKey ? `${fieldKey}.${childKey}` : childKey;
-          collectOverrides(childValue, nextKey);
-        });
-      }
-    };
-
-    Object.entries(form.formState.dirtyFields).forEach(([fieldKey, dirtyEntry]) => {
-      collectOverrides(dirtyEntry, fieldKey);
-    });
-
-    options?.validationOverrides?.forEach(({ queuePath: overrideQueuePath, field, value }) => {
-      pendingValues.push({
-        queuePath: overrideQueuePath,
-        fieldName: field,
-        value,
-      });
-    });
-
-    runContextValidation(queuePath, normalizedName, normalizedValue, {
-      pendingValues,
-    });
-  };
-
   const onSubmit = async (data: Record<string, string>) => {
     try {
       const fieldNameMapping: Record<string, string> = {};
@@ -463,70 +296,11 @@ export function usePropertyEditor({
 
       const pendingEntries = Object.entries(changedData);
 
-      const previewConfigData = new Map(configData);
-      pendingEntries.forEach(([propertyName, value]) => {
-        const propertyKey = buildPropertyKey(queuePath, propertyName);
-        if (!value.trim()) {
-          previewConfigData.delete(propertyKey);
-        } else {
-          previewConfigData.set(propertyKey, value);
-        }
-      });
-
-      const queueValidation = validateQueue({
-        queuePath,
-        properties: changedData,
-        configData,
-        stagedChanges,
-        schedulerData,
-      });
-
-      replaceQueueIssues(queuePath, queueValidation.issues);
-
-      const blockingIssues = queueValidation.issues.filter((issue) =>
-        isBlockingError(issue.rule, issue.severity),
-      );
-
-      const nonBlockingIssues = queueValidation.issues.filter(
-        (issue) => !isBlockingError(issue.rule, issue.severity),
-      );
-
-      if (blockingIssues.length > 0) {
-        toast.error(`Cannot stage changes: ${blockingIssues[0].message}`);
-        return { success: false, message: blockingIssues[0].message };
-      }
-
       let stagedCount = 0;
       let flexibleTemplatesDisabled = false;
 
       pendingEntries.forEach(([propertyName, value]) => {
-        const fieldIssues = nonBlockingIssues.filter((issue) => issue.field === propertyName);
-
-        const crossQueueIssues = validatePropertyChange({
-          propertyName,
-          propertyValue: value,
-          queuePath,
-          schedulerData,
-          configData: previewConfigData,
-          stagedChanges,
-          includeBlockingErrors: false,
-        });
-
-        const allIssues = [...fieldIssues, ...crossQueueIssues];
-
-        const uniqueIssues = allIssues.filter(
-          (issue, index, self) =>
-            index ===
-            self.findIndex(
-              (candidate) =>
-                candidate.queuePath === issue.queuePath &&
-                candidate.field === issue.field &&
-                candidate.message === issue.message &&
-                candidate.severity === issue.severity,
-            ),
-        );
-
-        stageChange(propertyName, value, uniqueIssues.length > 0 ? uniqueIssues : undefined);
+        stageChange(propertyName, value);
         stagedCount += 1;
 
         if (propertyName === 'auto-queue-creation-v2.enabled' && value !== 'true') {
@@ -559,13 +333,7 @@ export function usePropertyEditor({
         cleanResetRef.current = true;
       }
 
-      if (nonBlockingIssues.length > 0) {
-        toast.warning(
-          `${result.message} (with ${nonBlockingIssues.length} validation warning${nonBlockingIssues.length !== 1 ? 's' : ''})`,
-        );
-      } else {
-        toast.success(result.message);
-      }
+      toast.success(result.message);
 
       return result;
     } catch (error) {
@@ -578,7 +346,6 @@ export function usePropertyEditor({
   const handleReset = () => {
     // Clear only the changes for the current queue
     clearQueueChanges(queuePath);
-    clearQueueErrors(queuePath);
 
     // Reset form to original values
     const currentValues: Record<string, string> = {};
@@ -607,23 +374,31 @@ export function usePropertyEditor({
 
   const propertiesByCategory = propertiesByCategoryTemp;
 
-  // Get combined errors and validity state
-  const zodErrors = form.formState.errors;
-  const queueIssues = validationState[queuePath] ?? {};
-  const combinedErrors = mergeFormAndValidationErrors(zodErrors, queueIssues, normalizeFieldName);
+  // Server errors for this queue, keyed by property name, so categories with errors expand.
+  const errors: Record<string, { type: string; message: string }> = {};
+  getQueueIssues(serverIssues, queuePath)
+    .filter((issue) => issue.severity === 'error')
+    .forEach((issue) => {
+      const name = getIssuePropertyName(issue);
+      if (!name) return;
+      const existing = errors[name];
+      errors[name] = {
+        type: 'server',
+        message: existing ? `${existing.message}. ${issue.message}` : issue.message,
+      };
+    });
 
-  const hasZodErrors = !form.formState.isValid;
-  const hasValidationErrors = Object.values(queueIssues).some(hasBlockingIssues);
-  const isFormValid = !hasZodErrors && !hasValidationErrors;
+  // Server issues never block staging: they describe the staged proposal, and staging is
+  // how the user fixes them.
+  const isFormValid = form.formState.isValid;
 
   return {
     form,
     control,
     handleSubmit: handleSubmit(onSubmit),
     handleReset,
-    handleFieldBlur,
     stageChange,
-    errors: combinedErrors,
+    errors,
     isValid: isFormValid,
 
     hasChanges,
@@ -631,7 +406,7 @@ export function usePropertyEditor({
     propertiesByCategory,
 
     getStagedStatus,
-    getInheritanceInfo,
+    getExplained,
 
     properties: allProperties,
     formState: form.formState,

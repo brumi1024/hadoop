@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -41,19 +40,18 @@ import {
 import { Plus, Info } from 'lucide-react';
 import { useQueueActions } from '~/features/queue-management/hooks/useQueueActions';
 import { useCapacityEditor } from '~/features/queue-management/hooks/useCapacityEditor';
+import { getQueueNameValidationError } from '~/types';
 
 const addQueueSchema = z.object({
-  queueName: z
-    .string()
-    .min(1, 'Queue name is required')
-    .max(50, 'Queue name must be 50 characters or less')
-    .regex(
-      /^[a-zA-Z0-9_-]+$/,
-      'Queue name can only contain letters, numbers, underscores, and hyphens',
-    )
-    .refine((name) => !name.includes('.'), {
-      message: 'Queue name cannot contain dots',
-    }),
+  queueName: z.string().superRefine((name, context) => {
+    const error = getQueueNameValidationError(name);
+    if (error) {
+      context.addIssue({
+        code: 'custom',
+        message: error,
+      });
+    }
+  }),
   capacity: z.string().min(1, 'Capacity is required'),
   maxCapacity: z.string().min(1, 'Max capacity is required'),
   state: z.enum(['RUNNING', 'STOPPED']),
@@ -167,8 +165,8 @@ export function AddQueueDialog({ open, parentQueuePath, onClose }: AddQueueDialo
           <div className="flex items-start gap-2 p-3 rounded-md bg-muted/50 text-sm text-muted-foreground">
             <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
             <span>
-              After creating the queue, you will be able to set capacity for this queue and
-              adjust sibling capacities in the capacity editor.
+              After creating the queue, you will be able to set capacity for this queue and adjust
+              sibling capacities in the capacity editor.
             </span>
           </div>
 

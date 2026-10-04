@@ -16,133 +16,159 @@
  * limitations under the License.
  */
 
+/**
+ * Server validation issues and resolved-value sources.
+ *
+ * The UI has no validation rules of its own. Issues come from POST
+ * /scheduler-conf/validate/v2 and are attached to fields only by their exact
+ * (queuePath, propertyKey) pair; an issue with a null queuePath is global.
+ */
 
-import {
-  mergeStagedConfig,
-  applyFieldPreview,
-  buildEffectivePropertyKey,
-} from '~/utils/configUtils';
-import {
-  runFieldValidation,
-  type ValidationContext as RuleContext,
-} from '~/config/validation-rules';
-import type { ValidationIssue, SchedulerInfo, StagedChange } from '~/types';
+import type {
+  ExplainedProperty,
+  QueueExplain,
+  SchedulerValidationIssue,
+  StagedChange,
+  ValidationIssue,
+} from '~/types';
 import { SPECIAL_VALUES } from '~/types/constants/special-values';
-import { dedupeIssues } from './utils/dedupeIssues';
+import { buildGlobalPropertyKey, buildPropertyKey } from '~/utils/propertyUtils';
 
-type Severity = ValidationIssue['severity'];
-
-export interface FieldValidationOptions {
-  queuePath: string;
-  fieldName: string;
-  value: unknown;
-  configData: Map<string, string>;
-  stagedChanges: StagedChange[];
-  schedulerData?: SchedulerInfo | null;
+export function toValidationIssues(issues: SchedulerValidationIssue[]): ValidationIssue[] {
+  return issues.map((issue) => ({
+    queuePath: issue.queuePath,
+    propertyKey: issue.propertyKey,
+    ruleId: issue.ruleId,
+    severity: issue.severity === 'WARNING' ? 'warning' : 'error',
+    message: issue.message,
+  }));
 }
 
-export interface QueueValidationOptions {
-  queuePath: string;
-  properties: Record<string, string>;
-  configData: Map<string, string>;
-  stagedChanges: StagedChange[];
-  schedulerData?: SchedulerInfo | null;
-}
-
-export interface ValidationResult {
-  valid: boolean;
-  issues: ValidationIssue[];
-}
-
-export function validateField(options: FieldValidationOptions): ValidationResult {
-  const { queuePath, fieldName, value, configData, stagedChanges, schedulerData } = options;
-
-  const withStaged = mergeStagedConfig(configData, stagedChanges);
-  const effectiveConfig = applyFieldPreview(withStaged, queuePath, fieldName, value);
-
-  const issues = runFieldValidation(
-    buildRuleContext({
-      queuePath,
-      fieldName,
-      fieldValue: value,
-      config: effectiveConfig,
-      schedulerData,
-      stagedChanges,
-    }),
-  );
-
-  return {
-    valid: issues.every((issue) => issue.severity !== 'error'),
-    issues,
-  };
-}
-
-export function validateQueue(options: QueueValidationOptions): ValidationResult {
-  const { queuePath, properties, configData, stagedChanges, schedulerData } = options;
-
-  const withStaged = mergeStagedConfig(configData, stagedChanges);
-  const effectiveConfig = new Map(withStaged);
-
-  Object.entries(properties).forEach(([field, value]) => {
-    const key = buildEffectivePropertyKey(queuePath, field);
-    if (value === '' || value === null || value === undefined) {
-      effectiveConfig.delete(key);
-    } else {
-      effectiveConfig.set(key, value);
-    }
-  });
-
-  const fieldsToValidate = new Set<string>(Object.keys(properties));
-  if (!fieldsToValidate.has('capacity')) {
-    fieldsToValidate.add('capacity');
+/**
+ * The fully qualified key a staged change writes, or null for a queue removal.
+ */
+export function stagedChangePropertyKey(change: StagedChange): string | null {
+  if (change.property === SPECIAL_VALUES.QUEUE_MARKER) {
+    return null;
   }
-
-  const issues: ValidationIssue[] = [];
-
-  fieldsToValidate.forEach((field) => {
-    const key = buildEffectivePropertyKey(queuePath, field);
-    const fieldValue = Object.prototype.hasOwnProperty.call(properties, field)
-      ? properties[field]
-      : (effectiveConfig.get(key) ?? '');
-
-    const context = buildRuleContext({
-      queuePath,
-      fieldName: field,
-      fieldValue,
-      config: effectiveConfig,
-      schedulerData,
-      stagedChanges,
-    });
-
-    issues.push(...runFieldValidation(context));
-  });
-
-  return {
-    valid: issues.every((issue) => issue.severity !== 'error'),
-    issues: dedupeIssues(issues),
-  };
+  if (change.queuePath === SPECIAL_VALUES.GLOBAL_QUEUE_PATH) {
+    return buildGlobalPropertyKey(change.property);
+  }
+  return buildPropertyKey(change.queuePath, change.property);
 }
 
-function buildRuleContext(params: {
-  queuePath: string;
-  fieldName: string;
-  fieldValue: unknown;
-  config: Map<string, string>;
-  schedulerData?: SchedulerInfo | null;
-  stagedChanges: StagedChange[];
-}): RuleContext {
-  const { queuePath, fieldName, fieldValue, config, schedulerData, stagedChanges } = params;
-  const legacyModeEnabled = config.get(SPECIAL_VALUES.LEGACY_MODE_PROPERTY) !== 'false';
+/**
+ * Issues for one queue property, matched by queue path and full property key.
+ */
+export function getPropertyIssues(
+  issues: ValidationIssue[],
+  queuePath: string,
+  propertyName: string,
+): ValidationIssue[] {
+  const key = buildPropertyKey(queuePath, propertyName);
+  return issues.filter((issue) => issue.queuePath === queuePath && issue.propertyKey === key);
+}
 
-  return {
-    queuePath,
-    fieldName,
-    fieldValue,
-    config,
-    schedulerData,
-    stagedChanges,
-    legacyModeEnabled,
-  };
+/**
+ * Issues for one global property. Global issues carry a null queue path.
+ */
+export function getGlobalPropertyIssues(
+  issues: ValidationIssue[],
+  propertyName: string,
+): ValidationIssue[] {
+  const key = buildGlobalPropertyKey(propertyName);
+  return issues.filter((issue) => issue.queuePath === null && issue.propertyKey === key);
+}
+
+/**
+ * Every issue reported for a queue, with or without a property key.
+ */
+export function getQueueIssues(issues: ValidationIssue[], queuePath: string): ValidationIssue[] {
+  return issues.filter((issue) => issue.queuePath === queuePath);
+}
+
+export function getGlobalIssues(issues: ValidationIssue[]): ValidationIssue[] {
+  return issues.filter((issue) => issue.queuePath === null);
+}
+
+/**
+ * Issues for the key a staged change writes. A queue removal shows the queue's issues that
+ * have no property key.
+ */
+export function getStagedChangeIssues(
+  issues: ValidationIssue[],
+  change: StagedChange,
+): ValidationIssue[] {
+  const key = stagedChangePropertyKey(change);
+  const queuePath = change.queuePath === SPECIAL_VALUES.GLOBAL_QUEUE_PATH ? null : change.queuePath;
+  return issues.filter((issue) => issue.queuePath === queuePath && issue.propertyKey === key);
+}
+
+/**
+ * The short property name of an issue on a queue, when its key belongs to that queue.
+ */
+export function getIssuePropertyName(issue: ValidationIssue): string | null {
+  if (!issue.queuePath || !issue.propertyKey) {
+    return null;
+  }
+  const prefix = buildPropertyKey(issue.queuePath, '');
+  return issue.propertyKey.startsWith(prefix) ? issue.propertyKey.slice(prefix.length) : null;
+}
+
+export function formatIssue(issue: ValidationIssue): string {
+  const target = [issue.queuePath, issue.propertyKey ? `(${issue.propertyKey})` : null]
+    .filter(Boolean)
+    .join(' ');
+  return target ? `${target}: ${issue.message}` : issue.message;
+}
+
+export type ExplainIndex = Record<string, Record<string, ExplainedProperty>>;
+
+export function indexExplain(explain: QueueExplain[]): ExplainIndex {
+  const index: ExplainIndex = {};
+  for (const queue of explain) {
+    const properties: Record<string, ExplainedProperty> = {};
+    for (const property of queue.properties) {
+      properties[property.key] = property;
+    }
+    index[queue.queuePath] = properties;
+  }
+  return index;
+}
+
+/**
+ * The explained source of a queue property, or null when the server did not explain it.
+ */
+export function getExplainedProperty(
+  index: ExplainIndex,
+  queuePath: string,
+  propertyName: string,
+): ExplainedProperty | null {
+  return index[queuePath]?.[buildPropertyKey(queuePath, propertyName)] ?? null;
+}
+
+/**
+ * Describes where a resolved value comes from, using the explain section of validate/v2.
+ * Returns null when the queue sets the value itself.
+ */
+export function describeValueSource(explained: ExplainedProperty): string | null {
+  const detail = explained.sourceDetail;
+  switch (explained.source) {
+    case 'QUEUE':
+      return null;
+    case 'PARENT':
+      return detail ? `inherited from ${detail}` : 'inherited from the parent queue';
+    case 'GLOBAL':
+      return detail ? `from global setting ${detail}` : 'from a global setting';
+    case 'TEMPLATE_V2':
+      return detail ? `from flexible auto-creation template ${detail}` : 'from a template';
+    case 'TEMPLATE_V1':
+      return detail ? `from legacy auto-creation template ${detail}` : 'from a template';
+    case 'DEFAULT':
+      return 'scheduler default';
+    case 'DERIVED':
+      return detail ? `derived from ${detail}` : 'derived';
+  }
 }
 
 export function hasBlockingIssues(issues: ValidationIssue[]): boolean {

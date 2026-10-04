@@ -16,736 +16,176 @@
  * limitations under the License.
  */
 
-
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
-  validateField,
-  validateQueue,
+  describeValueSource,
+  getExplainedProperty,
+  getGlobalIssues,
+  getGlobalPropertyIssues,
+  getIssuePropertyName,
+  getPropertyIssues,
+  getQueueIssues,
+  getStagedChangeIssues,
   hasBlockingIssues,
+  indexExplain,
   splitIssues,
+  toValidationIssues,
 } from '~/features/validation/service';
-import type { SchedulerInfo, StagedChange, ValidationIssue } from '~/types';
-import { SPECIAL_VALUES } from '~/types/constants/special-values';
+import type { StagedChange, ValidationIssue } from '~/types';
 
-// Mock dependencies
-vi.mock('~/utils/configUtils', () => ({
-  mergeStagedConfig: vi.fn(),
-  applyFieldPreview: vi.fn(),
-  buildEffectivePropertyKey: vi.fn(),
-}));
+const issue = (overrides: Partial<ValidationIssue>): ValidationIssue => ({
+  queuePath: 'root.a',
+  propertyKey: 'yarn.scheduler.capacity.root.a.capacity',
+  ruleId: 'rule',
+  severity: 'error',
+  message: 'message',
+  ...overrides,
+});
 
-vi.mock('~/config/validation-rules', () => ({
-  runFieldValidation: vi.fn(),
-}));
+const change = (overrides: Partial<StagedChange>): StagedChange => ({
+  id: '1',
+  type: 'update',
+  queuePath: 'root.a',
+  property: 'capacity',
+  newValue: '10',
+  timestamp: 0,
+  ...overrides,
+});
 
-import {
-  mergeStagedConfig,
-  applyFieldPreview,
-  buildEffectivePropertyKey,
-} from '~/utils/configUtils';
-import { runFieldValidation } from '~/config/validation-rules';
-
-describe('validation service', () => {
-  const createMockSchedulerData = (): SchedulerInfo => ({
-    type: 'capacityScheduler',
-    capacity: 100,
-    usedCapacity: 0,
-    maxCapacity: 100,
-    queueName: 'root',
-    queues: {
-      queue: [
+describe('server issue mapping', () => {
+  it('converts severities and keeps paths and keys as sent', () => {
+    expect(
+      toValidationIssues([
         {
-          queueName: 'default',
-          queuePath: 'root.default',
-          queueType: 'leaf',
-          capacity: 50,
-          usedCapacity: 0,
-          maxCapacity: 50,
-          absoluteCapacity: 50,
-          absoluteMaxCapacity: 50,
-          absoluteUsedCapacity: 0,
-          numApplications: 0,
-          numActiveApplications: 0,
-          numPendingApplications: 0,
-          state: 'RUNNING',
-          resourcesUsed: { memory: 0, vCores: 0 },
-          creationMethod: 'static',
+          queuePath: null,
+          propertyKey: null,
+          ruleId: 'invalid-mutation',
+          severity: 'ERROR',
+          message: 'Queue root.x not found',
         },
-      ],
-    },
+        {
+          queuePath: 'root.a',
+          propertyKey: 'yarn.scheduler.capacity.root.a.capacity',
+          ruleId: 'w',
+          severity: 'WARNING',
+          message: 'Warning',
+        },
+      ]),
+    ).toEqual([
+      {
+        queuePath: null,
+        propertyKey: null,
+        ruleId: 'invalid-mutation',
+        severity: 'error',
+        message: 'Queue root.x not found',
+      },
+      {
+        queuePath: 'root.a',
+        propertyKey: 'yarn.scheduler.capacity.root.a.capacity',
+        ruleId: 'w',
+        severity: 'warning',
+        message: 'Warning',
+      },
+    ]);
   });
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-
-    // Default mock implementations
-    vi.mocked(mergeStagedConfig).mockImplementation((configData, _stagedChanges) => {
-      return new Map(configData);
+  it('matches queue properties by queue path and full key only', () => {
+    const own = issue({});
+    const sameKeyOtherQueue = issue({ queuePath: 'root.b' });
+    const label = issue({
+      propertyKey: 'yarn.scheduler.capacity.root.a.accessible-node-labels.gpu.capacity',
     });
+    const issues = [own, sameKeyOtherQueue, label, issue({ propertyKey: null })];
 
-    vi.mocked(applyFieldPreview).mockImplementation((config, _queuePath, _fieldName, _value) => {
-      return new Map(config);
-    });
-
-    vi.mocked(buildEffectivePropertyKey).mockImplementation((queuePath, field) => {
-      return `yarn.scheduler.capacity.${queuePath}.${field}`;
-    });
-
-    vi.mocked(runFieldValidation).mockReturnValue([]);
+    expect(getPropertyIssues(issues, 'root.a', 'capacity')).toEqual([own]);
+    expect(getPropertyIssues(issues, 'root.a', 'accessible-node-labels.gpu.capacity')).toEqual([
+      label,
+    ]);
+    expect(getQueueIssues(issues, 'root.a')).toHaveLength(3);
   });
 
-  describe('validateField', () => {
-    it('should validate a field successfully with no issues', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]);
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      const result = validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '60',
-        configData,
-        stagedChanges: [],
-        schedulerData: createMockSchedulerData(),
-      });
-
-      expect(result.valid).toBe(true);
-      expect(result.issues).toHaveLength(0);
+  it('keeps null-path issues global and matches global fields by key', () => {
+    const globalKey = issue({
+      queuePath: null,
+      propertyKey: 'yarn.scheduler.capacity.maximum-applications',
     });
+    const globalOnly = issue({ queuePath: null, propertyKey: null });
+    const issues = [globalKey, globalOnly, issue({})];
 
-    it('should return invalid when field has errors', () => {
-      const configData = new Map();
-
-      vi.mocked(runFieldValidation).mockReturnValue([
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Capacity must be greater than 0',
-          severity: 'error',
-          rule: 'capacity-minimum',
-        },
-      ]);
-
-      const result = validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '0',
-        configData,
-        stagedChanges: [],
-      });
-
-      expect(result.valid).toBe(false);
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].severity).toBe('error');
-    });
-
-    it('should return valid when field has only warnings', () => {
-      const configData = new Map();
-
-      vi.mocked(runFieldValidation).mockReturnValue([
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Consider increasing capacity',
-          severity: 'warning',
-          rule: 'capacity-warning',
-        },
-      ]);
-
-      const result = validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '10',
-        configData,
-        stagedChanges: [],
-      });
-
-      expect(result.valid).toBe(true);
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].severity).toBe('warning');
-    });
-
-    it('should merge staged changes into config', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]);
-      const stagedChanges: StagedChange[] = [
-        {
-          id: '1',
-          type: 'update',
-          queuePath: 'root.production',
-          property: 'capacity',
-          oldValue: '50',
-          newValue: '60',
-          timestamp: Date.now(),
-        },
-      ];
-
-      validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '40',
-        configData,
-        stagedChanges,
-      });
-
-      expect(mergeStagedConfig).toHaveBeenCalledWith(configData, stagedChanges);
-    });
-
-    it('should apply field preview to config', () => {
-      const configData = new Map();
-      const mergedConfig = new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]);
-
-      vi.mocked(mergeStagedConfig).mockReturnValue(mergedConfig);
-
-      validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '60',
-        configData,
-        stagedChanges: [],
-      });
-
-      expect(applyFieldPreview).toHaveBeenCalledWith(
-        mergedConfig,
-        'root.default',
-        'capacity',
-        '60',
-      );
-    });
-
-    it('should pass correct context to runFieldValidation', () => {
-      const configData = new Map();
-      const schedulerData = createMockSchedulerData();
-      const stagedChanges: StagedChange[] = [];
-
-      validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '60',
-        configData,
-        stagedChanges,
-        schedulerData,
-      });
-
-      expect(runFieldValidation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          queuePath: 'root.default',
-          fieldName: 'capacity',
-          fieldValue: '60',
-          config: expect.any(Map),
-          schedulerData,
-          stagedChanges,
-          legacyModeEnabled: true,
-        }),
-      );
-    });
-
-    it('should detect legacy mode disabled when property is "false"', () => {
-      const configData = new Map([[SPECIAL_VALUES.LEGACY_MODE_PROPERTY, 'false']]);
-
-      validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '60',
-        configData,
-        stagedChanges: [],
-      });
-
-      const context = vi.mocked(runFieldValidation).mock.calls[0][0];
-      expect(context.legacyModeEnabled).toBe(false);
-    });
-
-    it('should detect legacy mode enabled when property is absent', () => {
-      const configData = new Map();
-
-      validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '60',
-        configData,
-        stagedChanges: [],
-      });
-
-      const context = vi.mocked(runFieldValidation).mock.calls[0][0];
-      expect(context.legacyModeEnabled).toBe(true);
-    });
-
-    it('should detect legacy mode enabled when property is "true"', () => {
-      const configData = new Map([[SPECIAL_VALUES.LEGACY_MODE_PROPERTY, 'true']]);
-
-      validateField({
-        queuePath: 'root.default',
-        fieldName: 'capacity',
-        value: '60',
-        configData,
-        stagedChanges: [],
-      });
-
-      const context = vi.mocked(runFieldValidation).mock.calls[0][0];
-      expect(context.legacyModeEnabled).toBe(true);
-    });
+    expect(getGlobalIssues(issues)).toEqual([globalKey, globalOnly]);
+    expect(getGlobalPropertyIssues(issues, 'maximum-applications')).toEqual([globalKey]);
+    expect(getGlobalPropertyIssues(issues, 'yarn.scheduler.capacity.maximum-applications')).toEqual(
+      [globalKey],
+    );
   });
 
-  describe('validateQueue', () => {
-    it('should validate a queue successfully with no issues', () => {
-      const configData = new Map();
-      const properties = {
-        capacity: '50',
-        'maximum-capacity': '100',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      const result = validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      expect(result.valid).toBe(true);
-      expect(result.issues).toHaveLength(0);
+  it('attaches issues to the staged change that writes their key', () => {
+    const own = issue({});
+    const removal = issue({ propertyKey: null });
+    const globalKey = issue({
+      queuePath: null,
+      propertyKey: 'yarn.scheduler.capacity.maximum-applications',
     });
+    const issues = [own, removal, globalKey];
 
-    it('should validate all provided properties', () => {
-      const configData = new Map();
-      const properties = {
-        capacity: '50',
-        'maximum-capacity': '100',
-        state: 'RUNNING',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      // Should be called for each property (3 properties)
-      expect(runFieldValidation).toHaveBeenCalledTimes(3);
-    });
-
-    it('should always validate capacity even if not in properties', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]);
-      const properties = {
-        'maximum-capacity': '100',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      // Should be called for maximum-capacity and capacity
-      expect(runFieldValidation).toHaveBeenCalledTimes(2);
-      const calls = vi.mocked(runFieldValidation).mock.calls;
-      expect(calls.some((call) => call[0].fieldName === 'capacity')).toBe(true);
-    });
-
-    it('should delete property from config when value is empty string', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.state', 'RUNNING']]);
-      const properties = {
-        state: '',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-      vi.mocked(buildEffectivePropertyKey).mockReturnValue(
-        'yarn.scheduler.capacity.root.default.state',
-      );
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      const context = vi.mocked(runFieldValidation).mock.calls[0][0];
-      expect(context.config.has('yarn.scheduler.capacity.root.default.state')).toBe(false);
-    });
-
-    it('should delete property from config when value is null', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.state', 'RUNNING']]);
-      const properties = {
-        state: null as any,
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-      vi.mocked(buildEffectivePropertyKey).mockReturnValue(
-        'yarn.scheduler.capacity.root.default.state',
-      );
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      const context = vi.mocked(runFieldValidation).mock.calls[0][0];
-      expect(context.config.has('yarn.scheduler.capacity.root.default.state')).toBe(false);
-    });
-
-    it('should delete property from config when value is undefined', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.state', 'RUNNING']]);
-      const properties = {
-        state: undefined as any,
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-      vi.mocked(buildEffectivePropertyKey).mockReturnValue(
-        'yarn.scheduler.capacity.root.default.state',
-      );
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      const context = vi.mocked(runFieldValidation).mock.calls[0][0];
-      expect(context.config.has('yarn.scheduler.capacity.root.default.state')).toBe(false);
-    });
-
-    it('should use property value from properties object when provided', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]);
-      const properties = {
-        capacity: '60',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      const context = vi.mocked(runFieldValidation).mock.calls[0][0];
-      expect(context.fieldValue).toBe('60');
-    });
-
-    it('should use config value when property not in properties object', () => {
-      const configData = new Map([['yarn.scheduler.capacity.root.default.capacity', '50']]);
-      const properties = {
-        'maximum-capacity': '100',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      // Find the call for capacity
-      const calls = vi.mocked(runFieldValidation).mock.calls;
-      const capacityCall = calls.find((call) => call[0].fieldName === 'capacity');
-      expect(capacityCall![0].fieldValue).toBe('50');
-    });
-
-    it('should use empty string when property not in properties or config', () => {
-      const configData = new Map();
-      const properties = {
-        'maximum-capacity': '100',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      // Find the call for capacity
-      const calls = vi.mocked(runFieldValidation).mock.calls;
-      const capacityCall = calls.find((call) => call[0].fieldName === 'capacity');
-      expect(capacityCall![0].fieldValue).toBe('');
-    });
-
-    it('should deduplicate validation issues', () => {
-      const configData = new Map();
-      const properties = {
-        capacity: '50',
-        'maximum-capacity': '100',
-      };
-
-      vi.mocked(runFieldValidation)
-        .mockReturnValueOnce([
-          {
-            queuePath: 'root.default',
-            field: 'capacity',
-            message: 'Duplicate error',
-            severity: 'error',
-            rule: 'test-rule',
-          },
-        ])
-        .mockReturnValueOnce([
-          {
-            queuePath: 'root.default',
-            field: 'capacity',
-            message: 'Duplicate error',
-            severity: 'error',
-            rule: 'test-rule',
-          },
-        ]);
-
-      const result = validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      expect(result.issues).toHaveLength(1);
-    });
-
-    it('should return invalid when any property has errors', () => {
-      const configData = new Map();
-      const properties = {
-        capacity: '50',
-        'maximum-capacity': '40',
-      };
-
-      vi.mocked(runFieldValidation)
-        .mockReturnValueOnce([])
-        .mockReturnValueOnce([
-          {
-            queuePath: 'root.default',
-            field: 'maximum-capacity',
-            message: 'Maximum capacity must be >= capacity',
-            severity: 'error',
-            rule: 'max-capacity-minimum',
-          },
-        ]);
-
-      const result = validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      expect(result.valid).toBe(false);
-      expect(result.issues).toHaveLength(1);
-    });
-
-    it('should return valid when only warnings exist', () => {
-      const configData = new Map();
-      const properties = {
-        capacity: '50',
-      };
-
-      vi.mocked(runFieldValidation).mockReturnValue([
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Warning message',
-          severity: 'warning',
-          rule: 'test-warning',
-        },
-      ]);
-
-      const result = validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges: [],
-      });
-
-      expect(result.valid).toBe(true);
-      expect(result.issues).toHaveLength(1);
-    });
-
-    it('should merge staged changes into config', () => {
-      const configData = new Map();
-      const properties = {
-        capacity: '50',
-      };
-      const stagedChanges: StagedChange[] = [
-        {
-          id: '1',
-          type: 'update',
-          queuePath: 'root.production',
-          property: 'capacity',
-          oldValue: '50',
-          newValue: '60',
-          timestamp: Date.now(),
-        },
-      ];
-
-      vi.mocked(runFieldValidation).mockReturnValue([]);
-
-      validateQueue({
-        queuePath: 'root.default',
-        properties,
-        configData,
-        stagedChanges,
-      });
-
-      expect(mergeStagedConfig).toHaveBeenCalledWith(configData, stagedChanges);
-    });
+    expect(getStagedChangeIssues(issues, change({}))).toEqual([own]);
+    expect(
+      getStagedChangeIssues(issues, change({ type: 'remove', property: '__queue__' })),
+    ).toEqual([removal]);
+    expect(
+      getStagedChangeIssues(
+        issues,
+        change({ queuePath: 'global', property: 'maximum-applications' }),
+      ),
+    ).toEqual([globalKey]);
   });
 
-  describe('hasBlockingIssues', () => {
-    it('should return true when issues contain errors', () => {
-      const issues: ValidationIssue[] = [
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Error message',
-          severity: 'error',
-          rule: 'test-rule',
-        },
-      ];
+  it('derives a property name only from a key under the issue queue', () => {
+    expect(getIssuePropertyName(issue({}))).toBe('capacity');
+    expect(
+      getIssuePropertyName(issue({ propertyKey: 'yarn.scheduler.capacity.root.b.capacity' })),
+    ).toBeNull();
+    expect(getIssuePropertyName(issue({ propertyKey: null }))).toBeNull();
+    expect(getIssuePropertyName(issue({ queuePath: null }))).toBeNull();
+  });
+});
 
-      const result = hasBlockingIssues(issues);
+describe('explained value sources', () => {
+  const explained = {
+    key: 'yarn.scheduler.capacity.root.a.user-limit-factor',
+    value: '2',
+    source: 'PARENT' as const,
+    sourceDetail: 'root',
+  };
 
-      expect(result).toBe(true);
-    });
+  it('indexes explain by queue path and full key', () => {
+    const index = indexExplain([{ queuePath: 'root.a', properties: [explained] }]);
 
-    it('should return false when issues contain only warnings', () => {
-      const issues: ValidationIssue[] = [
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Warning message',
-          severity: 'warning',
-          rule: 'test-rule',
-        },
-      ];
-
-      const result = hasBlockingIssues(issues);
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false when issues array is empty', () => {
-      const issues: ValidationIssue[] = [];
-
-      const result = hasBlockingIssues(issues);
-
-      expect(result).toBe(false);
-    });
-
-    it('should return true when mixed errors and warnings exist', () => {
-      const issues: ValidationIssue[] = [
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Warning message',
-          severity: 'warning',
-          rule: 'test-warning',
-        },
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Error message',
-          severity: 'error',
-          rule: 'test-error',
-        },
-      ];
-
-      const result = hasBlockingIssues(issues);
-
-      expect(result).toBe(true);
-    });
+    expect(getExplainedProperty(index, 'root.a', 'user-limit-factor')).toEqual(explained);
+    expect(getExplainedProperty(index, 'root.b', 'user-limit-factor')).toBeNull();
   });
 
-  describe('splitIssues', () => {
-    it('should split errors and warnings correctly', () => {
-      const issues: ValidationIssue[] = [
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Error message',
-          severity: 'error',
-          rule: 'test-error',
-        },
-        {
-          queuePath: 'root.default',
-          field: 'state',
-          message: 'Warning message',
-          severity: 'warning',
-          rule: 'test-warning',
-        },
-      ];
+  it('describes each source', () => {
+    expect(describeValueSource({ ...explained, source: 'QUEUE' })).toBeNull();
+    expect(describeValueSource(explained)).toBe('inherited from root');
+    expect(describeValueSource({ ...explained, source: 'DEFAULT' })).toBe('scheduler default');
+    expect(describeValueSource({ ...explained, source: 'GLOBAL', sourceDetail: 'yarn.x' })).toBe(
+      'from global setting yarn.x',
+    );
+  });
+});
 
-      const result = splitIssues(issues);
+describe('issue severity helpers', () => {
+  it('detects blocking issues', () => {
+    expect(hasBlockingIssues([issue({ severity: 'warning' })])).toBe(false);
+    expect(hasBlockingIssues([issue({ severity: 'warning' }), issue({})])).toBe(true);
+    expect(hasBlockingIssues([])).toBe(false);
+  });
 
-      expect(result.errors).toHaveLength(1);
-      expect(result.warnings).toHaveLength(1);
-      expect(result.errors[0].severity).toBe('error');
-      expect(result.warnings[0].severity).toBe('warning');
-    });
+  it('splits errors and warnings', () => {
+    const error = issue({});
+    const warning = issue({ severity: 'warning' });
 
-    it('should handle all errors', () => {
-      const issues: ValidationIssue[] = [
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Error 1',
-          severity: 'error',
-          rule: 'test-error-1',
-        },
-        {
-          queuePath: 'root.default',
-          field: 'state',
-          message: 'Error 2',
-          severity: 'error',
-          rule: 'test-error-2',
-        },
-      ];
-
-      const result = splitIssues(issues);
-
-      expect(result.errors).toHaveLength(2);
-      expect(result.warnings).toHaveLength(0);
-    });
-
-    it('should handle all warnings', () => {
-      const issues: ValidationIssue[] = [
-        {
-          queuePath: 'root.default',
-          field: 'capacity',
-          message: 'Warning 1',
-          severity: 'warning',
-          rule: 'test-warning-1',
-        },
-        {
-          queuePath: 'root.default',
-          field: 'state',
-          message: 'Warning 2',
-          severity: 'warning',
-          rule: 'test-warning-2',
-        },
-      ];
-
-      const result = splitIssues(issues);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.warnings).toHaveLength(2);
-    });
-
-    it('should handle empty array', () => {
-      const issues: ValidationIssue[] = [];
-
-      const result = splitIssues(issues);
-
-      expect(result.errors).toHaveLength(0);
-      expect(result.warnings).toHaveLength(0);
-    });
+    expect(splitIssues([warning, error])).toEqual({ errors: [error], warnings: [warning] });
   });
 });

@@ -1,8 +1,23 @@
 /**
- * Capacity validation utilities
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * These functions extract changes from capacity editor drafts
- * and validate capacity configurations.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Extracts the property changes the capacity editor drafts make, so they can be staged.
  */
 
 import type { CapacityRowDraft } from '~/stores/slices/capacityEditorSlice';
@@ -11,9 +26,6 @@ import {
   DEFAULT_PARTITION_VALUE,
   getPropertyNameForLabel,
 } from './capacityEditor';
-import { buildPropertyKey } from '~/utils/propertyUtils';
-import { validateQueue } from '~/features/validation/service';
-import type { ValidationIssue, StagedChange, SchedulerInfo } from '~/types';
 
 export interface DraftCacheEntry {
   drafts: Record<string, CapacityRowDraft>;
@@ -100,73 +112,4 @@ export function extractChangesFromDrafts({
   });
 
   return changesByQueue;
-}
-
-/**
- * Build a preview config map with proposed changes applied.
- */
-export function buildPreviewConfig(
-  baseConfig: Map<string, string>,
-  changesByQueue: Map<string, Record<string, string>>,
-): Map<string, string> {
-  const previewConfig = new Map(baseConfig);
-
-  changesByQueue.forEach((properties, queuePath) => {
-    Object.entries(properties).forEach(([propertyName, value]) => {
-      const key = buildPropertyKey(queuePath, propertyName);
-      if (value === '') {
-        previewConfig.delete(key);
-      } else {
-        previewConfig.set(key, value);
-      }
-    });
-  });
-
-  return previewConfig;
-}
-
-export interface ValidateCapacityChangesParams {
-  changesByQueue: Map<string, Record<string, string>>;
-  previewConfig: Map<string, string>;
-  stagedChanges: StagedChange[];
-  schedulerData: SchedulerInfo | null;
-  force?: boolean;
-}
-
-export interface ValidateCapacityChangesResult {
-  issues: ValidationIssue[];
-  hasBlockingErrors: boolean;
-}
-
-/**
- * Validate capacity changes for all queues.
- * Returns aggregated issues and whether there are blocking errors.
- */
-export function validateCapacityChanges({
-  changesByQueue,
-  previewConfig,
-  stagedChanges,
-  schedulerData,
-  force = false,
-}: ValidateCapacityChangesParams): ValidateCapacityChangesResult {
-  let aggregatedIssues: ValidationIssue[] = [];
-  let hasBlockingErrors = false;
-
-  changesByQueue.forEach((properties, queuePath) => {
-    const result = validateQueue({
-      queuePath,
-      properties,
-      configData: previewConfig,
-      stagedChanges,
-      schedulerData,
-    });
-
-    aggregatedIssues = aggregatedIssues.concat(result.issues);
-
-    if (!force && result.issues.some((issue) => issue.severity === 'error')) {
-      hasBlockingErrors = true;
-    }
-  });
-
-  return { issues: aggregatedIssues, hasBlockingErrors };
 }

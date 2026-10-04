@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Capacity Editor slice
  *
@@ -32,12 +31,7 @@ import {
   buildCapacityEditorLabelOptions,
   DEFAULT_PARTITION_VALUE,
 } from '~/features/queue-management/utils/capacityEditor';
-import {
-  extractChangesFromDrafts,
-  buildPreviewConfig,
-  validateCapacityChanges,
-} from '~/features/queue-management/utils/capacityValidation';
-import type { ValidationIssue } from '~/types';
+import { extractChangesFromDrafts } from '~/features/queue-management/utils/capacityDraftChanges';
 
 export type CapacityEditorOrigin = 'property-editor' | 'context-menu' | 'add-queue';
 
@@ -83,7 +77,6 @@ interface CapacityEditorDialogState {
   draftCache: Record<string, { drafts: Record<string, CapacityRowDraft>; draftOrder: string[] }>;
   isSaving: boolean;
   saveError: string | null;
-  validationIssues: ValidationIssue[];
 }
 
 const createEmptyDialogState = (): CapacityEditorDialogState => ({
@@ -109,7 +102,6 @@ const createEmptyDialogState = (): CapacityEditorDialogState => ({
   draftCache: {},
   isSaving: false,
   saveError: null,
-  validationIssues: [],
 });
 
 const applyDraftsToState = (editorState: CapacityEditorDialogState, drafts: CapacityRowDraft[]) => {
@@ -166,7 +158,7 @@ export interface CapacityEditorSlice {
   setCapacityEditorLabel: (label: string | null) => void;
   updateCapacityDraft: (queuePath: string, updater: (draft: CapacityRowDraft) => void) => void;
   resetCapacityDrafts: () => void;
-  saveCapacityDrafts: (options?: { force?: boolean }) => Promise<boolean>;
+  saveCapacityDrafts: () => Promise<boolean>;
 }
 
 export const createCapacityEditorSlice: StateCreator<
@@ -345,7 +337,7 @@ export const createCapacityEditorSlice: StateCreator<
     });
   },
 
-  saveCapacityDrafts: async ({ force = false } = {}) => {
+  saveCapacityDrafts: async () => {
     const storeSnapshot = get();
     const {
       parentQueuePath,
@@ -365,9 +357,6 @@ export const createCapacityEditorSlice: StateCreator<
     set((state) => {
       state.capacityEditor.isSaving = true;
       state.capacityEditor.saveError = null;
-      if (!force) {
-        state.capacityEditor.validationIssues = [];
-      }
     });
 
     // Extract changes from drafts using shared utility
@@ -382,38 +371,14 @@ export const createCapacityEditorSlice: StateCreator<
     if (changesByQueue.size === 0) {
       set((state) => {
         state.capacityEditor.isSaving = false;
-        state.capacityEditor.validationIssues = [];
       });
       return true;
     }
 
-    // Build preview config and validate
-    const previewConfig = buildPreviewConfig(storeSnapshot.configData, changesByQueue);
-
-    const { issues: aggregatedIssues, hasBlockingErrors } = validateCapacityChanges({
-      changesByQueue,
-      previewConfig,
-      stagedChanges: storeSnapshot.stagedChanges,
-      schedulerData: storeSnapshot.schedulerData,
-      force,
-    });
-
-    if (!force && hasBlockingErrors) {
-      set((state) => {
-        state.capacityEditor.isSaving = false;
-        state.capacityEditor.saveError = 'Capacity validation failed.';
-        state.capacityEditor.validationIssues = aggregatedIssues;
-      });
-      return false;
-    }
-
+    // The server validates the staged proposal; the editor stages without client checks.
     // Stage the changes
     changesByQueue.forEach((properties, queuePath) => {
       Object.entries(properties).forEach(([propertyName, value]) => {
-        const propertyIssues = aggregatedIssues.filter(
-          (issue) => issue.queuePath === queuePath && issue.field === propertyName,
-        );
-
         const labelMatch = propertyName.match(/^accessible-node-labels\.([^.]+)\.([^.]+)$/);
 
         if (labelMatch) {
@@ -423,17 +388,11 @@ export const createCapacityEditorSlice: StateCreator<
             labelName,
             baseProperty as 'capacity' | 'maximum-capacity',
             value,
-            propertyIssues.length > 0 ? propertyIssues : undefined,
           );
           return;
         }
 
-        storeSnapshot.stageQueueChange(
-          queuePath,
-          propertyName,
-          value,
-          propertyIssues.length > 0 ? propertyIssues : undefined,
-        );
+        storeSnapshot.stageQueueChange(queuePath, propertyName, value);
       });
     });
 
@@ -456,7 +415,6 @@ export const createCapacityEditorSlice: StateCreator<
       const editorState = state.capacityEditor;
       editorState.isSaving = false;
       editorState.saveError = null;
-      editorState.validationIssues = aggregatedIssues;
       editorState.draftCache = {}; // Clear cache after successful save
       if (refreshedOrigin) {
         editorState.originInitialCapacity = refreshedOrigin.capacityValue;

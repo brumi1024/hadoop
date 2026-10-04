@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * Vector capacity editor
  *
@@ -113,7 +112,7 @@ export const VectorCapacityEditor: React.FC<VectorCapacityEditorProps> = ({
         <div className="mt-2 space-y-1">
           {issues.map((issue) => (
             <FieldMessage
-              key={`${issue.rule}-${issue.field}`}
+              key={`${issue.ruleId}-${issue.propertyKey}-${issue.message}`}
               className={
                 issue.severity === 'error'
                   ? 'text-[11px] text-destructive'

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 /**
  * API-specific types for YARN REST API responses and requests
  */
@@ -34,6 +33,13 @@ export type SchedulerResponse = {
 
 export type SchedulerConfResponse = {
   property: ConfigProperty[];
+  /** Strong ETag of the returned configuration, sent back as If-Match on PUT. */
+  etag?: string | null;
+};
+
+export type SchedulerConfWriteResult = {
+  /** Strong ETag of the configuration the write committed, or null when none was sent. */
+  etag: string | null;
 };
 
 export type YarnErrorResponse = {

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import type { Control, ControllerRenderProps, FormState, UseFormSetValue } from 'react-hook-form';
 import { cn } from '~/utils/cn';
@@ -28,7 +27,7 @@ import { FormField } from '~/components/ui/form';
 import { Field, FieldControl, FieldDescription } from '~/components/ui/field';
 import type { PropertyDescriptor } from '~/types/property-descriptor';
 import { SPECIAL_VALUES } from '~/types';
-import type { InheritedValueInfo } from '~/utils/resolveInheritedValue';
+import type { ExplainedProperty } from '~/types';
 import { EnumPropertyField } from './EnumPropertyField';
 import { CapacityPropertyField } from './CapacityPropertyField';
 import {
@@ -45,13 +44,7 @@ interface PropertyFormFieldProps {
   control: Control<Record<string, string>>;
   stagedStatus?: 'new' | 'modified' | 'deleted';
   isEnabled?: boolean;
-  onBlur?: (
-    propertyName: string,
-    value: string,
-    options?: {
-      validationOverrides?: Array<{ queuePath: string; field: string; value: string }>;
-    },
-  ) => void;
+  onBlur?: (propertyName: string, value: string) => void;
   errors?: string[];
   warnings?: string[];
   queuePath?: string;
@@ -59,7 +52,7 @@ interface PropertyFormFieldProps {
   parentQueuePath?: string;
   currentValues?: Partial<Record<string, string>>;
   setFormValue?: UseFormSetValue<Record<string, string>>;
-  inheritanceInfo?: InheritedValueInfo | null;
+  explained?: ExplainedProperty | null;
 }
 
 export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
@@ -75,9 +68,12 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
   parentQueuePath,
   currentValues,
   setFormValue: _setFormValue,
-  inheritanceInfo,
+  explained,
 }) => {
   void _setFormValue;
+  // The resolved value, shown as a placeholder when the queue does not set it itself
+  const resolvedPlaceholder =
+    explained && explained.source !== 'QUEUE' ? explained.value || undefined : undefined;
 
   const renderInput = (
     field: ControllerRenderProps<Record<string, string>, string>,
@@ -140,26 +136,28 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
               )}
               message={error ? String(error.message ?? '') : effectiveInlineError}
             />
-            <InheritedValueIndicator
-              inheritanceInfo={inheritanceInfo ?? null}
-            />
+            <InheritedValueIndicator explained={explained ?? null} />
             <BusinessErrorsList fieldName={fieldName} messages={effectiveRemainingErrors} />
+            <PropertyWarnings warnings={warnings} />
           </>
         );
       }
 
       case 'enum':
         return (
-          <EnumPropertyField
-            property={property}
-            field={field}
-            error={error}
-            stagedStatus={stagedStatus}
-            isEnabled={isEnabled}
-            inlineBusinessError={effectiveInlineError}
-            remainingBusinessErrors={effectiveRemainingErrors}
-            onBlur={onBlur}
-          />
+          <>
+            <EnumPropertyField
+              property={property}
+              field={field}
+              error={error}
+              stagedStatus={stagedStatus}
+              isEnabled={isEnabled}
+              inlineBusinessError={effectiveInlineError}
+              remainingBusinessErrors={effectiveRemainingErrors}
+              onBlur={onBlur}
+            />
+            <PropertyWarnings warnings={warnings} />
+          </>
         );
 
       case 'number':
@@ -177,12 +175,12 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
                     onBlur?.(property.name, e.target.value);
                   }}
                   step={property.displayFormat?.decimals ? 0.01 : 1}
-                  min={property.validationRules?.find((r) => r.type === 'range')?.min}
-                  max={property.validationRules?.find((r) => r.type === 'range')?.max}
+                  min={property.inputRange?.min}
+                  max={property.inputRange?.max}
                   disabled={!isEnabled}
                   aria-invalid={Boolean(error)}
                   className={commonClassName}
-                  placeholder={inheritanceInfo?.value || undefined}
+                  placeholder={resolvedPlaceholder}
                 />
                 {property.displayFormat?.suffix && (
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
@@ -191,10 +189,7 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
                 )}
               </div>
             </FieldControl>
-            <InheritedValueIndicator
-              inheritanceInfo={inheritanceInfo ?? null}
-              hasExplicitValue={Boolean(field.value)}
-            />
+            <InheritedValueIndicator explained={explained ?? null} />
             {property.description && (
               <FieldDescription className="text-xs text-muted-foreground">
                 {property.description}
@@ -202,6 +197,7 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
             )}
             <FieldErrorMessage error={error} inlineBusinessError={effectiveInlineError} />
             <BusinessErrorsList fieldName={fieldName} messages={effectiveRemainingErrors} />
+            <PropertyWarnings warnings={warnings} />
           </Field>
         );
 
@@ -263,7 +259,7 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
                     onBlur?.(property.name, e.target.value);
                   }}
                   rows={2}
-                  placeholder={inheritanceInfo?.value || property.defaultValue || undefined}
+                  placeholder={resolvedPlaceholder || property.defaultValue || undefined}
                   className={cn(
                     'flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50',
                     commonClassName,
@@ -280,7 +276,7 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
                     field.onBlur();
                     onBlur?.(property.name, e.target.value);
                   }}
-                  placeholder={inheritanceInfo?.value || property.defaultValue || undefined}
+                  placeholder={resolvedPlaceholder || property.defaultValue || undefined}
                   disabled={!isEnabled}
                   aria-invalid={Boolean(error)}
                   className={commonClassName}
@@ -307,10 +303,7 @@ export const PropertyFormField: React.FC<PropertyFormFieldProps> = ({
                 )}
               </div>
             )}
-            <InheritedValueIndicator
-              inheritanceInfo={inheritanceInfo ?? null}
-              hasExplicitValue={Boolean(field.value)}
-            />
+            <InheritedValueIndicator explained={explained ?? null} />
             {property.description && (
               <FieldDescription className="text-xs text-muted-foreground">
                 {property.description}

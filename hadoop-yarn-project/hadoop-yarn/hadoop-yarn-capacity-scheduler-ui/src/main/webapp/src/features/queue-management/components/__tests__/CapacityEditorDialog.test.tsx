@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -65,7 +64,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: null,
@@ -86,6 +84,7 @@ describe('CapacityEditorDialog', () => {
         getQueuePropertyValue: () => ({ value: '', isStaged: false }),
         getGlobalPropertyValue: () => ({ value: 'false', isStaged: false }),
         getQueuePartitionCapacities: mockGetQueuePartitionCapacities,
+        serverIssues: [],
         ...overrides,
       };
 
@@ -109,7 +108,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: null,
@@ -139,7 +137,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -170,7 +167,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -205,7 +201,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -236,7 +231,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -266,7 +260,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -296,7 +289,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'add-queue',
@@ -328,7 +320,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -366,7 +357,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -399,7 +389,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -448,7 +437,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -487,7 +475,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -527,7 +514,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -560,7 +546,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -596,7 +581,6 @@ describe('CapacityEditorDialog', () => {
             { value: 'gpu', label: 'gpu' },
           ],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -631,7 +615,6 @@ describe('CapacityEditorDialog', () => {
             { value: 'gpu', label: 'gpu' },
           ],
           labelsWithoutAccess,
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -665,15 +648,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [
-            {
-              severity: 'error',
-              message: 'Capacity exceeds 100%',
-              rule: 'capacity-sum',
-              queuePath: draft.queuePath,
-              field: 'capacity',
-            },
-          ],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -685,6 +659,15 @@ describe('CapacityEditorDialog', () => {
           originIsNew: false,
           draftCache: {},
         },
+        serverIssues: [
+          {
+            severity: 'error',
+            message: 'Capacity exceeds 100%',
+            ruleId: 'capacity-sum',
+            queuePath: draft.queuePath,
+            propertyKey: `yarn.scheduler.capacity.${draft.queuePath}.capacity`,
+          },
+        ],
       });
 
       render(<CapacityEditorDialog />);
@@ -703,15 +686,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [
-            {
-              severity: 'warning',
-              message: 'Capacity is low',
-              rule: 'capacity-low',
-              queuePath: draft.queuePath,
-              field: 'capacity',
-            },
-          ],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -723,81 +697,20 @@ describe('CapacityEditorDialog', () => {
           originIsNew: false,
           draftCache: {},
         },
+        serverIssues: [
+          {
+            severity: 'warning',
+            message: 'Capacity is low',
+            ruleId: 'capacity-low',
+            queuePath: draft.queuePath,
+            propertyKey: `yarn.scheduler.capacity.${draft.queuePath}.capacity`,
+          },
+        ],
       });
 
       render(<CapacityEditorDialog />);
 
       expect(screen.getByText('Capacity is low')).toBeInTheDocument();
-    });
-
-    it('should disable "Stage anyway" button when there are no blocking issues', () => {
-      const draft = createMockDraft();
-      mockStoreState({
-        capacityEditor: {
-          isOpen: true,
-          drafts: { [draft.queuePath]: draft },
-          draftOrder: [draft.queuePath],
-          parentQueuePath: 'root',
-          selectedNodeLabel: null,
-          labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
-          labelsWithoutAccess: new Set(),
-          validationIssues: [],
-          isSaving: false,
-          saveError: null,
-          origin: 'property-editor',
-          originQueuePath: draft.queuePath,
-          originQueueName: draft.queueName,
-          originQueueState: null,
-          originInitialCapacity: null,
-          originInitialMaxCapacity: null,
-          originIsNew: false,
-          draftCache: {},
-        },
-      });
-
-      render(<CapacityEditorDialog />);
-
-      const stageAnywayButton = screen.getByText('Stage anyway');
-      expect(stageAnywayButton).toBeDisabled();
-    });
-
-    it('should enable "Stage anyway" button when there are blocking issues', () => {
-      const draft = createMockDraft();
-      mockStoreState({
-        capacityEditor: {
-          isOpen: true,
-          drafts: { [draft.queuePath]: draft },
-          draftOrder: [draft.queuePath],
-          parentQueuePath: 'root',
-          selectedNodeLabel: null,
-          labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
-          labelsWithoutAccess: new Set(),
-          validationIssues: [
-            {
-              severity: 'error',
-              message: 'Capacity exceeds 100%',
-              rule: 'capacity-sum',
-              queuePath: draft.queuePath,
-              field: 'capacity',
-            },
-          ],
-          isSaving: false,
-          saveError: null,
-          origin: 'property-editor',
-          originQueuePath: draft.queuePath,
-          originQueueName: draft.queueName,
-          originQueueState: null,
-          originInitialCapacity: null,
-          originInitialMaxCapacity: null,
-          originIsNew: false,
-          draftCache: {},
-        },
-      });
-
-      render(<CapacityEditorDialog />);
-
-      const stageAnywayButton = screen.getByText('Stage anyway');
-      expect(stageAnywayButton).not.toBeDisabled();
     });
   });
 
@@ -813,7 +726,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -830,7 +742,7 @@ describe('CapacityEditorDialog', () => {
       render(<CapacityEditorDialog />);
 
       expect(screen.getByText('Save changes')).toBeInTheDocument();
-      expect(screen.getByText('Stage anyway')).toBeInTheDocument();
+      expect(screen.queryByText('Stage anyway')).not.toBeInTheDocument();
     });
 
     it('should display loading state when saving', () => {
@@ -844,7 +756,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: true,
           saveError: null,
           origin: 'property-editor',
@@ -874,7 +785,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: 'Failed to save changes',
           origin: 'property-editor',
@@ -893,7 +803,7 @@ describe('CapacityEditorDialog', () => {
       expect(screen.getByText('Failed to save changes')).toBeInTheDocument();
     });
 
-    it('should call saveCapacityDrafts with force=false when "Save changes" is clicked', async () => {
+    it('should call saveCapacityDrafts when "Save changes" is clicked', async () => {
       const user = userEvent.setup();
       const draft = createMockDraft();
       mockSaveCapacityDrafts.mockResolvedValue(true);
@@ -907,7 +817,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -927,53 +836,7 @@ describe('CapacityEditorDialog', () => {
       await user.click(saveButton);
 
       await waitFor(() => {
-        expect(mockSaveCapacityDrafts).toHaveBeenCalledWith({ force: false });
-      });
-    });
-
-    it('should call saveCapacityDrafts with force=true when "Stage anyway" is clicked', async () => {
-      const user = userEvent.setup();
-      const draft = createMockDraft();
-      mockSaveCapacityDrafts.mockResolvedValue(true);
-
-      mockStoreState({
-        capacityEditor: {
-          isOpen: true,
-          drafts: { [draft.queuePath]: draft },
-          draftOrder: [draft.queuePath],
-          parentQueuePath: 'root',
-          selectedNodeLabel: null,
-          labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
-          labelsWithoutAccess: new Set(),
-          validationIssues: [
-            {
-              severity: 'error',
-              message: 'Capacity exceeds 100%',
-              rule: 'capacity-sum',
-              queuePath: draft.queuePath,
-              field: 'capacity',
-            },
-          ],
-          isSaving: false,
-          saveError: null,
-          origin: 'property-editor',
-          originQueuePath: draft.queuePath,
-          originQueueName: draft.queueName,
-          originQueueState: null,
-          originInitialCapacity: null,
-          originInitialMaxCapacity: null,
-          originIsNew: false,
-          draftCache: {},
-        },
-      });
-
-      render(<CapacityEditorDialog />);
-
-      const stageAnywayButton = screen.getByText('Stage anyway');
-      await user.click(stageAnywayButton);
-
-      await waitFor(() => {
-        expect(mockSaveCapacityDrafts).toHaveBeenCalledWith({ force: true });
+        expect(mockSaveCapacityDrafts).toHaveBeenCalledWith();
       });
     });
 
@@ -991,7 +854,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -1029,7 +891,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -1068,7 +929,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -1100,7 +960,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: false,
           saveError: null,
           origin: 'property-editor',
@@ -1135,7 +994,6 @@ describe('CapacityEditorDialog', () => {
           selectedNodeLabel: null,
           labelOptions: [{ value: '__DEFAULT_PARTITION__', label: 'Default partition' }],
           labelsWithoutAccess: new Set(),
-          validationIssues: [],
           isSaving: true,
           saveError: null,
           origin: 'property-editor',

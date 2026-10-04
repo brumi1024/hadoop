@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React from 'react';
 import { Trash2, AlertTriangle, AlertCircle } from 'lucide-react';
 import { cn } from '~/utils/cn';
@@ -24,36 +23,13 @@ import { Button } from '~/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '~/components/ui/tooltip';
 import type { StagedChange } from '~/types';
 import { SPECIAL_VALUES } from '~/types';
-import {
-  buildPropertyKey,
-  buildGlobalPropertyKey,
-  buildNodeLabelPropertyKey,
-} from '~/utils/propertyUtils';
+import { useSchedulerStore } from '~/stores/schedulerStore';
+import { getStagedChangeIssues, stagedChangePropertyKey } from '~/features/validation/service';
 
 interface DiffViewProps {
   change: StagedChange;
   onRevert: () => void;
   timestamp: string;
-}
-
-/**
- * Builds the full property key for display
- */
-function buildFullPropertyKey(change: StagedChange): string {
-  const { queuePath, property, label } = change;
-
-  // Handle global properties
-  if (queuePath === SPECIAL_VALUES.GLOBAL_QUEUE_PATH) {
-    return buildGlobalPropertyKey(property);
-  }
-
-  // Handle node label properties
-  if (label) {
-    return buildNodeLabelPropertyKey(queuePath, label, property);
-  }
-
-  // Handle regular queue properties
-  return buildPropertyKey(queuePath, property);
 }
 
 /**
@@ -96,7 +72,9 @@ const DiffLine: React.FC<{
 export const DiffView: React.FC<DiffViewProps> = ({ change, onRevert, timestamp }) => {
   // Check if this is a queue removal operation (special marker property)
   const isQueueRemoval = change.property === SPECIAL_VALUES.QUEUE_MARKER;
-  const propertyKey = !isQueueRemoval ? buildFullPropertyKey(change) : '';
+  const propertyKey = stagedChangePropertyKey(change) ?? '';
+  const serverIssues = useSchedulerStore((state) => state.serverIssues);
+  const issues = getStagedChangeIssues(serverIssues, change);
 
   return (
     <div className="border rounded-md bg-card overflow-hidden">
@@ -149,13 +127,22 @@ export const DiffView: React.FC<DiffViewProps> = ({ change, onRevert, timestamp 
         )}
       </div>
 
-      {/* Validation errors/warnings */}
-      {change.validationErrors && change.validationErrors.length > 0 && (
+      {change.baselineDrift && (
+        <div className="border-t px-3 py-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-500/10">
+          Changed on the server after this edit was staged: was{' '}
+          <span className="font-mono">{change.baselineDrift.stagedAgainst ?? '(unset)'}</span>, now{' '}
+          <span className="font-mono">{change.baselineDrift.current ?? '(unset)'}</span>. Review the
+          proposed value.
+        </div>
+      )}
+
+      {/* Server validation errors/warnings for this key */}
+      {issues.length > 0 && (
         <div className="border-t-2 border-dashed border-muted-foreground/20 mt-3">
           <div className="px-3 pt-3 pb-2 space-y-2">
-            {change.validationErrors.map((error) => (
+            {issues.map((error) => (
               <div
-                key={`${error.queuePath}-${error.field}-${error.message}`}
+                key={`${error.ruleId}-${error.propertyKey}-${error.message}`}
                 className={cn(
                   'flex items-start gap-2 text-xs px-3 py-2 rounded-md border',
                   error.severity === 'error'
@@ -173,9 +160,6 @@ export const DiffView: React.FC<DiffViewProps> = ({ change, onRevert, timestamp 
                     {error.severity === 'error' ? 'Validation Error' : 'Warning'}
                   </div>
                   <div>{error.message}</div>
-                  {error.queuePath !== change.queuePath && (
-                    <div className="text-xs opacity-70 mt-1">Affects: {error.queuePath}</div>
-                  )}
                 </div>
               </div>
             ))}

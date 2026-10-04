@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import { http, HttpResponse } from 'msw';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -64,10 +63,14 @@ export const serverHandlers = [
     const changes = await request.json();
     console.log('Mock: Applying configuration changes:', changes);
 
-    return HttpResponse.json({
-      response: 'Configuration updated successfully',
+    return new HttpResponse('Configuration change successfully applied.', {
+      headers: { 'Content-Type': 'text/plain' },
     });
   }),
+
+  http.post('/ws/v1/cluster/scheduler-conf/validate/v2', () =>
+    HttpResponse.json({ validationResult: { valid: true, issues: {}, explain: {} } }),
+  ),
 
   http.get('/ws/v1/cluster/scheduler-conf/version', () => {
     return HttpResponse.json({

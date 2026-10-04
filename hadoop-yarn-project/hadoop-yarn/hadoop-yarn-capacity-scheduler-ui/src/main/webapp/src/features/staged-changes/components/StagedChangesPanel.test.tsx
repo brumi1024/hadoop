@@ -16,14 +16,13 @@
  * limitations under the License.
  */
 
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '~/testing/setup/setup';
 import { StagedChangesPanel } from './StagedChangesPanel';
 import userEvent from '@testing-library/user-event';
 import { useSchedulerStore } from '~/stores/schedulerStore';
 import { toast } from 'sonner';
-import type { StagedChange } from '~/types';
+import type { StagedChange, ValidationIssue } from '~/types';
 
 // Mock the store
 vi.mock('~/stores/schedulerStore');
@@ -103,12 +102,111 @@ const mockRevertChange = vi.fn();
 const mockClearAllChanges = vi.fn();
 const mockApplyChanges = vi.fn();
 
+const panelDefaults = {
+  stagedChanges: [] as StagedChange[],
+  applyError: null,
+  isReadOnly: false,
+  serverIssues: [] as ValidationIssue[],
+  appliedWarnings: [] as ValidationIssue[],
+  validationError: null,
+  proposalStale: false,
+  isValidatingProposal: false,
+  compareFreshBaseline: vi.fn(),
+  dismissAppliedWarnings: vi.fn(),
+};
+
+const mockPanelState = (overrides: Record<string, unknown>) => {
+  vi.mocked(useSchedulerStore).mockImplementation((selector: any) =>
+    selector({
+      ...panelDefaults,
+      revertChange: mockRevertChange,
+      clearAllChanges: mockClearAllChanges,
+      applyChanges: mockApplyChanges,
+      ...overrides,
+    }),
+  );
+};
+
+describe('StagedChangesPanel server validation', () => {
+  it('keeps apply warnings visible without staged edits', () => {
+    mockPanelState({
+      appliedWarnings: [
+        {
+          queuePath: 'root.a',
+          propertyKey: null,
+          ruleId: 'nonportable-name',
+          severity: 'warning',
+          message: 'Name warning',
+        },
+      ],
+    });
+    render(<StagedChangesPanel open={true} onClose={vi.fn()} onOpen={vi.fn()} />);
+    expect(screen.getByText(/warnings from the last apply/i)).toBeInTheDocument();
+    expect(screen.getByText(/name warning/i)).toBeInTheDocument();
+  });
+
+  it('offers reload and compare after a stale apply and blocks apply', async () => {
+    const compareFreshBaseline = vi.fn().mockResolvedValue(undefined);
+    mockPanelState({
+      stagedChanges: mockStagedChanges,
+      proposalStale: true,
+      compareFreshBaseline,
+    });
+    const user = userEvent.setup();
+    render(<StagedChangesPanel open={true} onClose={vi.fn()} onOpen={vi.fn()} />);
+
+    expect(screen.getByText(/configuration changed on the server/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /apply all changes/i })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: /reload and compare/i }));
+    expect(compareFreshBaseline).toHaveBeenCalledOnce();
+  });
+
+  it('lists global issues and issues not attached to a staged change', () => {
+    mockPanelState({
+      stagedChanges: mockStagedChanges,
+      serverIssues: [
+        {
+          queuePath: null,
+          propertyKey: null,
+          ruleId: 'invalid-mutation',
+          severity: 'error',
+          message: 'Queue root.missing not found',
+        },
+        {
+          queuePath: 'root.sibling',
+          propertyKey: 'yarn.scheduler.capacity.root.sibling.capacity',
+          ruleId: 'children-capacity-sum',
+          severity: 'error',
+          message: 'Sibling capacities do not add up',
+        },
+      ],
+    });
+    render(<StagedChangesPanel open={true} onClose={vi.fn()} onOpen={vi.fn()} />);
+
+    expect(screen.getByText(/queue root.missing not found/i)).toBeInTheDocument();
+    expect(screen.getByText(/sibling capacities do not add up/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 validation errors/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /apply all changes/i })).toBeDisabled();
+  });
+
+  it('shows a failed validation request as an error', () => {
+    mockPanelState({
+      stagedChanges: mockStagedChanges,
+      validationError: 'Validation failed: User admin is not authorized',
+    });
+    render(<StagedChangesPanel open={true} onClose={vi.fn()} onOpen={vi.fn()} />);
+    expect(screen.getByText(/validation unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/not authorized/i)).toBeInTheDocument();
+  });
+});
+
 describe('StagedChangesPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Mock the selector pattern used by the component
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: [],
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -122,6 +220,7 @@ describe('StagedChangesPanel', () => {
   it('should show floating button when closed with staged changes', () => {
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -149,6 +248,7 @@ describe('StagedChangesPanel', () => {
     const user = userEvent.setup();
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -168,6 +268,7 @@ describe('StagedChangesPanel', () => {
   it('should render staged changes grouped by queue', () => {
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -196,6 +297,7 @@ describe('StagedChangesPanel', () => {
     const user = userEvent.setup();
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -217,6 +319,7 @@ describe('StagedChangesPanel', () => {
     const user = userEvent.setup();
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -239,6 +342,7 @@ describe('StagedChangesPanel', () => {
     mockApplyChanges.mockResolvedValue(undefined);
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -268,6 +372,7 @@ describe('StagedChangesPanel', () => {
 
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -292,6 +397,7 @@ describe('StagedChangesPanel', () => {
   it('should display apply error alert when present', () => {
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -313,6 +419,7 @@ describe('StagedChangesPanel', () => {
 
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -338,6 +445,7 @@ describe('StagedChangesPanel', () => {
   it('should render with draggable drawer', async () => {
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: mockStagedChanges,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -386,6 +494,7 @@ describe('StagedChangesPanel', () => {
 
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: changes,
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,
@@ -403,6 +512,7 @@ describe('StagedChangesPanel', () => {
   it('should display singular form for one change', () => {
     (useSchedulerStore as any).mockImplementation((selector: any) => {
       const state = {
+        ...panelDefaults,
         stagedChanges: [mockStagedChanges[0]],
         revertChange: mockRevertChange,
         clearAllChanges: mockClearAllChanges,

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-
 import React, { useState } from 'react';
 import { Trash2, Check, Gauge, AlertTriangle, AlertCircle, Info } from 'lucide-react';
 import {
@@ -31,12 +30,31 @@ import { Badge } from '~/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '~/components/ui/alert';
 import { useShallow } from 'zustand/react/shallow';
 import { useSchedulerStore } from '~/stores/schedulerStore';
-import type { StagedChange } from '~/types';
+import type { StagedChange, ValidationIssue } from '~/types';
+import { getStagedChangeIssues, splitIssues } from '~/features/validation/service';
 import { QueueChangeGroup } from './QueueChangeGroup';
 import { toast } from 'sonner';
 import { Kbd } from '~/components/ui/kbd';
 import { getModifierKey } from '~/hooks/useKeyboardShortcuts';
 import { READ_ONLY_PROPERTY } from '~/config';
+
+function IssueList({ title, issues }: { title: string; issues: ValidationIssue[] }) {
+  return (
+    <div role="status" className="space-y-1 text-sm">
+      <div className="font-medium">{title}</div>
+      {issues.map((issue) => (
+        <p
+          key={`${issue.ruleId}-${issue.queuePath}-${issue.propertyKey}-${issue.message}`}
+          className={issue.severity === 'error' ? 'text-destructive' : 'text-amber-600'}
+        >
+          {issue.queuePath ? `${issue.queuePath}: ` : ''}
+          {issue.propertyKey ? `${issue.propertyKey}: ` : ''}
+          {issue.message}
+        </p>
+      ))}
+    </div>
+  );
+}
 
 interface StagedChangesPanelProps {
   open: boolean;
@@ -48,11 +66,25 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
   const [isApplying, setIsApplying] = useState(false);
 
   // State values (trigger re-renders only when these specific values change)
-  const { stagedChanges, applyError, isReadOnly } = useSchedulerStore(
+  const {
+    stagedChanges,
+    applyError,
+    isReadOnly,
+    serverIssues,
+    appliedWarnings,
+    validationError,
+    proposalStale,
+    isValidatingProposal,
+  } = useSchedulerStore(
     useShallow((s) => ({
       stagedChanges: s.stagedChanges,
       applyError: s.applyError,
       isReadOnly: s.isReadOnly,
+      serverIssues: s.serverIssues,
+      appliedWarnings: s.appliedWarnings,
+      validationError: s.validationError,
+      proposalStale: s.proposalStale,
+      isValidatingProposal: s.isValidatingProposal,
     })),
   );
 
@@ -60,6 +92,24 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
   const revertChange = useSchedulerStore((s) => s.revertChange);
   const clearAllChanges = useSchedulerStore((s) => s.clearAllChanges);
   const applyChanges = useSchedulerStore((s) => s.applyChanges);
+  const compareFreshBaseline = useSchedulerStore((s) => s.compareFreshBaseline);
+  const dismissAppliedWarnings = useSchedulerStore((s) => s.dismissAppliedWarnings);
+
+  const handleCompareBaseline = async () => {
+    setIsApplying(true);
+    try {
+      await compareFreshBaseline();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
+  // Issues shown next to a staged change are rendered by DiffView; the rest are listed here.
+  const issuesWithoutChange = serverIssues.filter(
+    (issue) => !stagedChanges.some((change) => getStagedChangeIssues([issue], change).length > 0),
+  );
 
   // Group changes by queue path for organized display
   const changesByQueue = stagedChanges.reduce(
@@ -83,23 +133,8 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
     return a.localeCompare(b);
   });
 
-  // Calculate validation summary
-  let errorCount = 0;
-  let warningCount = 0;
-
-  stagedChanges.forEach((change) => {
-    if (change.validationErrors) {
-      change.validationErrors.forEach((error) => {
-        if (error.severity === 'error') {
-          errorCount++;
-        } else {
-          warningCount++;
-        }
-      });
-    }
-  });
-
-  const validationSummary = { errorCount, warningCount };
+  const { errors, warnings } = splitIssues(serverIssues);
+  const validationSummary = { errorCount: errors.length, warningCount: warnings.length };
 
   const handleApplyChanges = async () => {
     setIsApplying(true);
@@ -126,7 +161,7 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
   };
 
   // Show floating button when panel is closed and there are staged changes
-  if (!open && stagedChanges.length > 0) {
+  if (!open && (stagedChanges.length > 0 || appliedWarnings.length > 0)) {
     return (
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
         <Button
@@ -138,13 +173,17 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
         >
           <span className="absolute inset-0 rounded-full bg-primary/20 animate-pulse" />
           <Gauge className="h-5 w-5 mr-2 relative z-10" />
-          <span className="relative z-10 font-semibold">View Staged Changes</span>
-          <Badge
-            variant="destructive"
-            className="absolute -top-2 -right-2 shadow-lg animate-bounce"
-          >
-            {stagedChanges.length}
-          </Badge>
+          <span className="relative z-10 font-semibold">
+            {stagedChanges.length > 0 ? 'View Staged Changes' : 'View apply warnings'}
+          </span>
+          {stagedChanges.length > 0 && (
+            <Badge
+              variant="destructive"
+              className="absolute -top-2 -right-2 shadow-lg animate-bounce"
+            >
+              {stagedChanges.length}
+            </Badge>
+          )}
         </Button>
       </div>
     );
@@ -157,12 +196,50 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
           {/* Header */}
           <DrawerHeader className="border-b pb-4 bg-gradient-to-r from-muted/30 to-transparent">
             <div className="space-y-3">
-              {applyError && (
+              {applyError && !proposalStale && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
                   <AlertTitle>Failed to Apply Changes</AlertTitle>
                   <AlertDescription className="break-words">{applyError}</AlertDescription>
                 </Alert>
+              )}
+              {proposalStale && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Configuration changed on the server</AlertTitle>
+                  <AlertDescription className="space-y-2">
+                    <p>
+                      Nothing was applied. Reload the configuration to see what changed under your
+                      staged edits, then review and apply again.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={isApplying}
+                      onClick={() => void handleCompareBaseline()}
+                    >
+                      Reload and compare
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {validationError && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Validation unavailable</AlertTitle>
+                  <AlertDescription className="break-words">{validationError}</AlertDescription>
+                </Alert>
+              )}
+              {issuesWithoutChange.length > 0 && (
+                <IssueList title="Configuration issues" issues={issuesWithoutChange} />
+              )}
+              {stagedChanges.length === 0 && appliedWarnings.length > 0 && (
+                <div className="space-y-2">
+                  <IssueList title="Warnings from the last apply" issues={appliedWarnings} />
+                  <Button variant="outline" size="sm" onClick={dismissAppliedWarnings}>
+                    Dismiss
+                  </Button>
+                </div>
               )}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -172,6 +249,11 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
                   <Badge variant="secondary" className="font-semibold">
                     {stagedChanges.length} {stagedChanges.length === 1 ? 'change' : 'changes'}
                   </Badge>
+                  {isValidatingProposal && stagedChanges.length > 0 && (
+                    <span role="status" className="text-xs text-muted-foreground">
+                      Validating...
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -253,13 +335,21 @@ export function StagedChangesPanel({ open, onClose, onOpen }: StagedChangesPanel
                 <Button
                   variant="default"
                   onClick={handleApplyChanges}
-                  disabled={isApplying || validationSummary.errorCount > 0 || isReadOnly}
+                  disabled={
+                    isApplying ||
+                    isValidatingProposal ||
+                    proposalStale ||
+                    validationSummary.errorCount > 0 ||
+                    isReadOnly
+                  }
                   title={
                     isReadOnly
                       ? 'Cannot apply changes in read-only mode'
-                      : validationSummary.errorCount > 0
-                        ? 'Fix validation errors before applying changes'
-                        : undefined
+                      : proposalStale
+                        ? 'Reload and compare before applying'
+                        : validationSummary.errorCount > 0
+                          ? 'Fix validation errors before applying changes'
+                          : undefined
                   }
                   className="gap-2"
                 >

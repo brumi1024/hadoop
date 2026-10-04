@@ -19,59 +19,68 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '~/testing/setup/setup';
 import { InheritedValueIndicator } from '../PropertyFieldHelpers';
+import type { ExplainedProperty } from '~/types';
+
+const explained = (overrides: Partial<ExplainedProperty>): ExplainedProperty => ({
+  key: 'yarn.scheduler.capacity.root.a.user-limit-factor',
+  value: '2',
+  source: 'PARENT',
+  sourceDetail: 'root',
+  ...overrides,
+});
 
 describe('InheritedValueIndicator', () => {
-  it('renders nothing when inheritanceInfo is null', () => {
-    const { container } = render(<InheritedValueIndicator inheritanceInfo={null} />);
+  it('renders nothing without an explained value', () => {
+    const { container } = render(<InheritedValueIndicator explained={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows parent queue source with value', () => {
-    render(
-      <InheritedValueIndicator
-        inheritanceInfo={{ value: 'true', source: 'queue', sourcePath: 'root.production' }}
-      />,
+  it('renders nothing when the queue sets the value itself', () => {
+    const { container } = render(
+      <InheritedValueIndicator explained={explained({ source: 'QUEUE', sourceDetail: null })} />,
     );
-    expect(screen.getByText(/inherited from/i)).toBeInTheDocument();
-    expect(screen.getByText(/root\.production/)).toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows global default source', () => {
-    render(
-      <InheritedValueIndicator inheritanceInfo={{ value: '100', source: 'global' }} />,
-    );
-    expect(screen.getByText(/global default/i)).toBeInTheDocument();
+  it('shows the parent queue a value is inherited from', () => {
+    render(<InheritedValueIndicator explained={explained({})} />);
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText(/inherited from root/i)).toBeInTheDocument();
   });
 
-  it('shows "overrides" message when field has explicit value', () => {
+  it('shows the global key a value comes from', () => {
     render(
       <InheritedValueIndicator
-        inheritanceInfo={{ value: 'true', source: 'queue', sourcePath: 'root.production' }}
-        hasExplicitValue
+        explained={explained({
+          source: 'GLOBAL',
+          sourceDetail: 'yarn.scheduler.capacity.user-limit-factor',
+        })}
       />,
     );
-    expect(screen.getByText(/overrides/i)).toBeInTheDocument();
-    expect(screen.getByText(/root\.production/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/from global setting yarn\.scheduler\.capacity\.user-limit-factor/i),
+    ).toBeInTheDocument();
   });
 
-  it('shows scaled message for scaled-from-global properties', () => {
-    render(
+  it('labels template, default and derived sources', () => {
+    const { rerender } = render(
       <InheritedValueIndicator
-        inheritanceInfo={{ value: '500', source: 'queue', sourcePath: 'root.production', isScaled: true }}
+        explained={explained({
+          source: 'TEMPLATE_V2',
+          sourceDetail: 'yarn.scheduler.capacity.root.auto-queue-creation-v2.template.capacity',
+        })}
       />,
     );
-    expect(screen.getByText(/root\.production/)).toBeInTheDocument();
-    expect(screen.getByText(/scaled by queue capacity/i)).toBeInTheDocument();
-  });
+    expect(screen.getByText(/flexible auto-creation template/i)).toBeInTheDocument();
 
-  it('shows scaled override message when explicit and scaled-from-global', () => {
-    render(
+    rerender(<InheritedValueIndicator explained={explained({ source: 'DEFAULT' })} />);
+    expect(screen.getByText(/scheduler default/i)).toBeInTheDocument();
+
+    rerender(
       <InheritedValueIndicator
-        inheritanceInfo={{ value: '500', source: 'queue', sourcePath: 'root.production', isScaled: true }}
-        hasExplicitValue
+        explained={explained({ source: 'DERIVED', sourceDetail: 'capacity' })}
       />,
     );
-    expect(screen.getByText(/overrides/i)).toBeInTheDocument();
-    expect(screen.getByText(/scaled by queue capacity/i)).toBeInTheDocument();
+    expect(screen.getByText(/derived from capacity/i)).toBeInTheDocument();
   });
 });
