@@ -23,6 +23,7 @@ import java.util.Set;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
 
@@ -68,6 +69,8 @@ import org.apache.hadoop.yarn.webapp.dao.SchedConfUpdateInfo;
  * This class mocks the RESTRequestInterceptor.
  */
 public class MockRESTRequestInterceptor extends AbstractRESTRequestInterceptor {
+
+  static final String SCHEDULER_CONF_BODY = "scheduler-conf";
 
   @Override
   public void setNextInterceptor(RESTRequestInterceptor next) {
@@ -383,12 +386,13 @@ public class MockRESTRequestInterceptor extends AbstractRESTRequestInterceptor {
   @Override
   public Response updateSchedulerConfiguration(SchedConfUpdateInfo mutationInfo,
       HttpServletRequest hsr) throws AuthorizationException, InterruptedException {
-    return Response.status(Status.OK).build();
+    return Response.status(Status.OK).header(HttpHeaders.ETAG, "\"rm-etag\"").build();
   }
 
   @Override
   public Response getSchedulerConfiguration(HttpServletRequest hsr)
       throws AuthorizationException {
-    return Response.status(Status.OK).build();
+    return Response.status(Status.OK).entity(SCHEDULER_CONF_BODY)
+        .header(HttpHeaders.ETAG, "\"rm-etag\"").build();
   }
 }

@@ -75,7 +75,7 @@ public class QueueCapacityConfigParser {
       return new QueueCapacityVector();
     }
     // Trim all spaces from capacity string
-    capacityString = capacityString.replaceAll(" ", "");
+    capacityString = capacityString.replace(" ", "");
 
     for (Parser parser : parsers) {
       Matcher matcher = parser.regex.matcher(capacityString);
@@ -191,7 +191,7 @@ public class QueueCapacityConfigParser {
       return false;
     }
 
-    String formattedCapacityString = configuredCapacity.replaceAll(" ", "");
+    String formattedCapacityString = configuredCapacity.replace(" ", "");
     return RESOURCE_PATTERN.matcher(formattedCapacityString).find();
   }
 

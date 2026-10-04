@@ -39,7 +39,6 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCap
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueueCapacityVector.ResourceUnitCapacityType;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePath;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.QueuePrefixes;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.QueueConfigResolver;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.QueueProperty;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.QueueProperty.Kind;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.Resolved;
@@ -530,8 +529,8 @@ public final class CapacityRule implements ValidationRule {
         .getAutoCreatedQueueObjectTemplateConfPrefix(parent.getQueuePath());
     Set<String> labels;
     try {
-      labels = QueueConfigResolver.configuredNodeLabelsByQueue(
-          context.getProposed()).get(templatePath.getFullPath());
+      labels = context.getConfiguredNodeLabelsByQueue()
+          .get(templatePath.getFullPath());
     } catch (RuntimeException e) {
       // Reported by the node label rule
       return;

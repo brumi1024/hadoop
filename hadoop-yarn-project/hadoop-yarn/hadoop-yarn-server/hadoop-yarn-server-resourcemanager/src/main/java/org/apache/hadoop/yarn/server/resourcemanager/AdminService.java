@@ -116,6 +116,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
 import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeResourceUpdateEvent;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.security.authorize.RMPolicyProvider;
 
 import org.apache.hadoop.classification.VisibleForTesting;
@@ -454,8 +455,25 @@ public class AdminService extends CompositeService implements
     // refresh the reservation system
     ReservationSystem rSystem = rm.getRMContext().getReservationSystem();
     if (rSystem != null) {
+      CapacityScheduler.checkWriteLockNotHeld(
+          rm.getRMContext().getScheduler(),
+          "Refreshing the reservation system");
       rSystem.reinitialize(conf, rm.getRMContext());
     }
+  }
+
+  /**
+   * Loads the configuration {@link #refreshQueues()} passes to the
+   * scheduler, without refreshing anything.
+   *
+   * @return the freshly loaded configuration
+   * @throws IOException if the configuration cannot be read
+   * @throws YarnException if the configuration cannot be read
+   */
+  @Private
+  public Configuration loadQueueRefreshConfiguration()
+      throws IOException, YarnException {
+    return loadNewConfiguration();
   }
 
   private boolean isSchedulerMutable() {

@@ -2917,19 +2917,30 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       return Response.status(Status.BAD_REQUEST)
           .entity("Configuration change only supported by mutable configuration store.").build();
     } else {
+      String etag;
       try {
-        callerUGI.doAs((PrivilegedExceptionAction<Void>) () -> {
+        List<String> ifMatch = SchedulerConfigurationETag.getIfMatch(hsr);
+        etag = callerUGI.doAs((PrivilegedExceptionAction<String>) () -> {
           MutableConfigurationProvider provider =
               ((MutableConfScheduler) scheduler).getMutableConfProvider();
-          LogMutation logMutation = applyMutation(provider, callerUGI, mutationInfo);
-          return refreshQueues(provider, logMutation);
+          LogMutation logMutation = applyMutation(provider, callerUGI, mutationInfo,
+              ifMatch);
+          refreshQueues(provider, logMutation);
+          // Computed under the monitor that serializes mutations, so it is the
+          // ETag of the configuration this change committed, which a client
+          // sends as If-Match with its next change of a multi-step update
+          return SchedulerConfigurationETag.compute(provider.getConfiguration());
         });
+      } catch (ConfigurationPreconditionFailedException e) {
+        LOG.info("Rejected scheduler configuration change: {}", e.getMessage());
+        return Response.status(Status.PRECONDITION_FAILED).type(MediaType.TEXT_PLAIN)
+            .entity(e.getMessage()).build();
       } catch (IOException e) {
         LOG.error("Exception thrown when modifying configuration.", e);
         return Response.status(Status.BAD_REQUEST).entity(e.getMessage()).build();
       }
-      return Response.status(Status.OK).entity("Configuration change successfully applied.")
-          .build();
+      return Response.status(Status.OK).header(HttpHeaders.ETAG, etag)
+          .entity("Configuration change successfully applied.").build();
     }
   }
 
@@ -2946,14 +2957,60 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
   }
 
   private LogMutation applyMutation(MutableConfigurationProvider provider,
-      UserGroupInformation callerUGI, SchedConfUpdateInfo mutationInfo) throws Exception {
+      UserGroupInformation callerUGI, SchedConfUpdateInfo mutationInfo,
+      List<String> ifMatch) throws Exception {
     if (!provider.getAclMutationPolicy().isMutationAllowed(callerUGI,
         mutationInfo)) {
       throw new org.apache.hadoop.security.AccessControlException("User"
           + " is not admin of all modified queues.");
     }
+    // Evaluated under the monitor that serializes mutations, so no other PUT
+    // can be logged between this check and logAndApplyMutation. Format does
+    // not take this monitor and stays an administrator reset.
+    if (SchedulerConfigurationETag.isConditional(ifMatch)
+        && !SchedulerConfigurationETag.matches(ifMatch,
+            SchedulerConfigurationETag.compute(provider.getConfiguration()))) {
+      throw new ConfigurationPreconditionFailedException("If-Match does not"
+          + " match the current scheduler configuration. Read the scheduler"
+          + " configuration again and resubmit the change with its ETag.");
+    }
+    validateMutation(provider, mutationInfo);
     return provider.logAndApplyMutation(callerUGI,
         mutationInfo);
+  }
+
+  /**
+   * Validates the configuration the mutation would activate before it is
+   * logged to the store, so that a mutation the queue refresh would reject
+   * leaves the store, the provider and the scheduler unchanged. It fails
+   * like the refresh would; the refresh still runs every check afterwards.
+   */
+  private void validateMutation(MutableConfigurationProvider provider,
+      SchedConfUpdateInfo mutationInfo) throws IOException, YarnException {
+    ResourceScheduler scheduler = rm.getResourceScheduler();
+    if (!(scheduler instanceof CapacityScheduler)) {
+      return;
+    }
+    // Throws the IOException logAndApplyMutation throws for a mutation that
+    // cannot be assembled
+    Configuration proposed = provider.applyChanges(
+        provider.getConfiguration(), mutationInfo);
+    ((CapacityScheduler) scheduler).validateConfigurationMutation(
+        rm.getRMContext().getRMAdminService().loadQueueRefreshConfiguration(),
+        proposed);
+  }
+
+  /**
+   * Signals a failed If-Match precondition from inside the caller's doAs.
+   * It extends IOException so doAs rethrows it unwrapped.
+   */
+  private static final class ConfigurationPreconditionFailedException
+      extends IOException {
+    private static final long serialVersionUID = 1L;
+
+    private ConfigurationPreconditionFailedException(String message) {
+      super(message);
+    }
   }
 
   private boolean isConfigurationMutable(ResourceScheduler scheduler) {
@@ -2981,6 +3038,7 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       Configuration schedulerConf = mutableConfigurationProvider
           .getConfiguration();
       return Response.status(Status.OK)
+          .header(HttpHeaders.ETAG, SchedulerConfigurationETag.compute(schedulerConf))
           .entity(new ConfInfo(schedulerConf))
           .build();
     } else {

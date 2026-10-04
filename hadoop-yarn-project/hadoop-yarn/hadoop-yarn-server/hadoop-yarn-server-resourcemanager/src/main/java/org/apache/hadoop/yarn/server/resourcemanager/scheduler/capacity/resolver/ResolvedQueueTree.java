@@ -87,6 +87,21 @@ public final class ResolvedQueueTree {
     return Collections.unmodifiableCollection(queues.values());
   }
 
+  /**
+   * Whether this tree is what {@link QueueConfigResolver#resolve} returns
+   * for a snapshot and inputs: it was resolved from the same snapshot object
+   * with equivalent inputs. The resolver is deterministic, so such a tree can
+   * be used instead of resolving again, as long as no queue was resolved
+   * into it since.
+   * @param otherSnapshot the snapshot
+   * @param otherInputs the inputs
+   * @return true if this tree is the resolution of the snapshot and inputs
+   */
+  public boolean isResolvedFrom(ConfigSnapshot otherSnapshot,
+      ResolutionInputs otherInputs) {
+    return snapshot == otherSnapshot && inputs.isEquivalentTo(otherInputs);
+  }
+
   ConfigSnapshot getSnapshot() {
     return snapshot;
   }

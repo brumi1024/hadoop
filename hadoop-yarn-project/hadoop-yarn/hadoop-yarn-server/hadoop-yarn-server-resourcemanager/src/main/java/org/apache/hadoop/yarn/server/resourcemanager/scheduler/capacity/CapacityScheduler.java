@@ -21,6 +21,7 @@ package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -34,6 +35,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import org.apache.commons.lang3.StringUtils;
@@ -105,6 +107,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfSchedu
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.MutableConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.NodeType;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.PreemptableResourceScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.ResourceScheduler;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.Queue;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueInvalidException;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.QueueMetrics;
@@ -124,6 +127,14 @@ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.activities.Alloca
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.CSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.FileBasedCSConfigurationProvider;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.conf.MutableCSConfigurationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacitySchedulerQueueContext.PreparedConfiguration;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.ConfigSnapshot;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.resolver.ResolvedQueueTree;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.CSConfigValidator;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ClusterFacts;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationContext;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationIssue;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.validation.ValidationResult;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.KillableContainer;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.preemption.PreemptionManager;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.common.AssignmentInformation;
@@ -203,6 +214,21 @@ public class CapacityScheduler extends
   private int maxAssignPerHeartbeat;
 
   private CSConfigurationProvider csConfProvider;
+
+  /**
+   * Serializes queue refreshes. A refresh loads, validates and activates its
+   * configuration while holding this lock, so refreshes activate their
+   * configurations in the order they load them. Lock order: the callers'
+   * monitors (AdminService, RMWebServices), this lock, then the scheduler
+   * read and write locks. It is never taken under the scheduler write lock,
+   * and nothing under it takes the caller monitors, the reservation system
+   * or the plan follower.
+   */
+  private final ReentrantLock refreshLock = new ReentrantLock();
+
+  /** The WARNING issues the last validation before activation found. */
+  private volatile List<ValidationIssue> lastValidationWarnings =
+      Collections.emptyList();
 
   private int threadNum = 0;
 
@@ -442,24 +468,52 @@ public class CapacityScheduler extends
 
   public void reinitialize(Configuration newConf, RMContext rmContext,
          boolean validation) throws IOException {
+    Preconditions.checkState(!writeLock.isHeldByCurrentThread(),
+        "A queue refresh must not start under the scheduler write lock");
+    refreshLock.lock();
+    try {
+      loadValidateAndActivate(newConf, rmContext, validation);
+    } finally {
+      refreshLock.unlock();
+    }
+  }
+
+  @VisibleForTesting
+  boolean hasQueuedRefresh(Thread thread) {
+    return refreshLock.hasQueuedThread(thread);
+  }
+
+  private void loadValidateAndActivate(Configuration newConf,
+      RMContext rmContext, boolean validation) throws IOException {
+    CapacitySchedulerConfiguration proposed = null;
+    PreparedConfiguration prepared = null;
+    if (!validation) {
+      // Loaded and validated under the refresh lock but before the write
+      // lock is taken, so that a rejected configuration is never activated
+      // and the provider I/O does not block scheduling. The queue context
+      // installs the copy that was validated and reuses its resolved tree.
+      proposed = csConfProvider.loadConfiguration(new Configuration(newConf));
+      prepared = new PreparedConfiguration(proposed);
+      prepared.setResolvedQueueTree(
+          validateBeforeActivation(prepared.getConfiguration()));
+    }
     writeLock.lock();
     try {
-      Configuration configuration = new Configuration(newConf);
       CapacitySchedulerConfiguration oldConf = this.conf;
       if (validation) {
         this.conf = new CapacitySchedulerConfiguration(newConf, false);
       } else {
-        this.conf = csConfProvider.loadConfiguration(configuration);
+        this.conf = proposed;
       }
       validateConf(this.conf);
       try {
         LOG.info("Re-initializing queues...");
         refreshMaximumAllocation(
             ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
-        reinitializeQueues(this.conf);
+        reinitializeQueues(this.conf, prepared);
       } catch (Throwable t) {
         this.conf = oldConf;
-        reinitializeQueues(this.conf);
+        reinitializeQueues(this.conf, null);
         refreshMaximumAllocation(
             ResourceUtils.fetchMaximumAllocationFromConfig(this.conf));
         throw new IOException("Failed to re-init queues : " + t.getMessage(),
@@ -494,6 +548,115 @@ public class CapacityScheduler extends
   public void reinitialize(Configuration newConf, RMContext rmContext)
       throws IOException {
     reinitialize(newConf, rmContext, false);
+  }
+
+  /**
+   * Validates a configuration before it is activated, outside the scheduler
+   * write lock, against the live queues. WARNING issues are logged; the
+   * first ERROR fails with the exception the queue refresh would fail with.
+   * Checks the validator does not cover still run during the refresh.
+   *
+   * @param proposed the configuration to activate; its snapshot is validated
+   * @return the queue tree resolved from the snapshot, or null if the
+   *         configuration could not be validated
+   * @throws IOException for an ERROR the queue refresh reports as
+   *         {@code Failed to re-init queues}
+   */
+  private ResolvedQueueTree validateBeforeActivation(
+      CapacitySchedulerConfiguration proposed) throws IOException {
+    ValidationContext context;
+    ValidationResult result;
+    try {
+      ConfigSnapshot snapshot = proposed.getConfigSnapshot();
+      ClusterFacts facts = ClusterFacts.capture(this);
+      context = new ValidationContext(snapshot, facts, proposed);
+      result = new CSConfigValidator().validate(context);
+    } catch (RuntimeException e) {
+      LOG.warn("Could not validate the scheduler configuration before"
+          + " activating it; the queue refresh still checks it", e);
+      return null;
+    }
+    List<ValidationIssue> warnings = new ArrayList<>();
+    for (ValidationIssue issue : result.getIssues()) {
+      if (!issue.isError()) {
+        warnings.add(issue);
+      }
+    }
+    logWarnings(warnings);
+    CapacitySchedulerConfigValidator.throwIfInvalid(result);
+    return context.getTree();
+  }
+
+  /**
+   * Logs the warnings of a validation in one event, one line each. Warnings
+   * equal to the ones the previous validation found are summarized in one
+   * INFO line instead, so that refreshing an unchanged configuration does
+   * not log them again.
+   *
+   * @param warnings the WARNING issues of a validation
+   */
+  private void logWarnings(List<ValidationIssue> warnings) {
+    List<ValidationIssue> previous = lastValidationWarnings;
+    lastValidationWarnings = warnings;
+    if (warnings.isEmpty()) {
+      return;
+    }
+    if (warnings.equals(previous)) {
+      LOG.info("The scheduler configuration has the {} warning(s) logged"
+          + " for the previous validation", warnings.size());
+      return;
+    }
+    StringBuilder message = new StringBuilder();
+    for (ValidationIssue issue : warnings) {
+      if (message.length() > 0) {
+        message.append(System.lineSeparator());
+      }
+      message.append("Scheduler configuration warning: ").append(issue);
+    }
+    LOG.warn("{}", message);
+  }
+
+  /**
+   * Validates, without storing or activating anything, the configuration a
+   * queue refresh would activate if the mutable scheduler configuration were
+   * {@code schedulerConf}. Must be called without the scheduler write lock.
+   *
+   * @param newConf the configuration a queue refresh passes to
+   *                {@link #reinitialize(Configuration, RMContext)}
+   * @param schedulerConf the proposed mutable scheduler configuration
+   * @throws IOException for an ERROR, as the queue refresh would fail
+   */
+  @InterfaceAudience.Private
+  public void validateConfigurationMutation(Configuration newConf,
+      Configuration schedulerConf) throws IOException {
+    validateBeforeActivation(MutableCSConfigurationProvider.mergeConfiguration(
+        schedulerConf, new Configuration(newConf)));
+  }
+
+  /**
+   * @return whether the current thread holds the scheduler write lock
+   */
+  @InterfaceAudience.Private
+  public boolean isWriteLockHeldByCurrentThread() {
+    return writeLock.isHeldByCurrentThread();
+  }
+
+  /**
+   * Fails when the current thread holds the write lock of a Capacity
+   * Scheduler. Configuration store I/O and the reservation system refresh
+   * must run outside that lock: the plan follower takes its own monitor and
+   * then the scheduler write lock.
+   *
+   * @param scheduler the scheduler
+   * @param operation the operation, for the message
+   * @throws IllegalStateException if the write lock is held
+   */
+  @InterfaceAudience.Private
+  public static void checkWriteLockNotHeld(ResourceScheduler scheduler,
+      String operation) {
+    Preconditions.checkState(!(scheduler instanceof CapacityScheduler
+        && ((CapacityScheduler) scheduler).isWriteLockHeldByCurrentThread()),
+        "%s must not run under the scheduler write lock", operation);
   }
 
   long getAsyncScheduleInterval() {
@@ -819,9 +982,9 @@ public class CapacityScheduler extends
   }
 
   @Lock(CapacityScheduler.class)
-  private void reinitializeQueues(CapacitySchedulerConfiguration newConf)
-  throws IOException {
-    queueContext.reinitialize();
+  private void reinitializeQueues(CapacitySchedulerConfiguration newConf,
+      PreparedConfiguration prepared) throws IOException {
+    queueContext.reinitialize(prepared);
     this.queueManager.reinitializeQueues(newConf);
     updatePlacementRules();
 
