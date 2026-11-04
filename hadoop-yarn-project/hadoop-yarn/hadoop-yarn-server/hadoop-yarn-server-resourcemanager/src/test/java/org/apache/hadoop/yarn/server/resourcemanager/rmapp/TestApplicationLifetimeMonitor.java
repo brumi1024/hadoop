@@ -248,72 +248,79 @@ public class TestApplicationLifetimeMonitor {
         true);
     conf.set(YarnConfiguration.RM_STORE, MemoryRMStateStore.class.getName());
 
-    MockRM rm1 = new MockRM(conf);
-    MemoryRMStateStore memStore = (MemoryRMStateStore) rm1.getRMStateStore();
-    rm1.start();
-    MockNM nm1 =
-        new MockNM("127.0.0.1:1234", 8192, rm1.getResourceTrackerService());
-    nm1.registerNode();
-    nm1.nodeHeartbeat(true);
+    MockRM rm1 = null;
+    MockRM rm2 = null;
+    try {
+      rm1 = new MockRM(conf);
+      MemoryRMStateStore memStore = (MemoryRMStateStore) rm1.getRMStateStore();
+      rm1.start();
+      MockNM nm1 =
+          new MockNM("127.0.0.1:1234", 8192, rm1.getResourceTrackerService());
+      nm1.registerNode();
+      nm1.nodeHeartbeat(true);
 
-    long appLifetime = 30L;
-    Map<ApplicationTimeoutType, Long> timeouts =
-        new HashMap<ApplicationTimeoutType, Long>();
-    timeouts.put(ApplicationTimeoutType.LIFETIME, appLifetime);
-    RMApp app1 = MockRMAppSubmitter.submit(rm1,
-        MockRMAppSubmissionData.Builder.createWithMemory(200, rm1)
-            .withAppPriority(Priority.newInstance(0))
-            .withApplicationTimeouts(timeouts)
-            .build());
-    MockAM am1 = MockRM.launchAndRegisterAM(app1, rm1, nm1);
+      long appLifetime = 30L;
+      Map<ApplicationTimeoutType, Long> timeouts =
+          new HashMap<ApplicationTimeoutType, Long>();
+      timeouts.put(ApplicationTimeoutType.LIFETIME, appLifetime);
+      RMApp app1 = MockRMAppSubmitter.submit(rm1,
+          MockRMAppSubmissionData.Builder.createWithMemory(200, rm1)
+              .withAppPriority(Priority.newInstance(0))
+              .withApplicationTimeouts(timeouts)
+              .build());
+      MockAM am1 = MockRM.launchAndRegisterAM(app1, rm1, nm1);
 
-    // Re-start RM
-    MockRM rm2 = new MockRM(conf, memStore);
+      // Re-start RM
+      rm2 = new MockRM(conf, memStore);
 
-    // make sure app has been unregistered with old RM else both will trigger
-    // Expire event
-    rm1.getRMContext().getRMAppLifetimeMonitor().unregisterApp(
-        app1.getApplicationId(), ApplicationTimeoutType.LIFETIME);
+      // make sure app has been unregistered with old RM else both will trigger
+      // Expire event
+      rm1.getRMContext().getRMAppLifetimeMonitor().unregisterApp(
+          app1.getApplicationId(), ApplicationTimeoutType.LIFETIME);
 
-    rm2.start();
-    nm1.setResourceTrackerService(rm2.getResourceTrackerService());
+      rm2.start();
+      nm1.setResourceTrackerService(rm2.getResourceTrackerService());
 
-    // recover app
-    RMApp recoveredApp1 =
-        rm2.getRMContext().getRMApps().get(app1.getApplicationId());
+      // recover app
+      RMApp recoveredApp1 =
+          rm2.getRMContext().getRMApps().get(app1.getApplicationId());
 
-    NMContainerStatus amContainer = TestRMRestart.createNMContainerStatus(
-        am1.getApplicationAttemptId(), 1, ContainerState.RUNNING);
-    NMContainerStatus runningContainer = TestRMRestart.createNMContainerStatus(
-        am1.getApplicationAttemptId(), 2, ContainerState.RUNNING);
+      NMContainerStatus amContainer = TestRMRestart.createNMContainerStatus(
+          am1.getApplicationAttemptId(), 1, ContainerState.RUNNING);
+      NMContainerStatus runningContainer = TestRMRestart.createNMContainerStatus(
+          am1.getApplicationAttemptId(), 2, ContainerState.RUNNING);
 
-    nm1.registerNode(Arrays.asList(amContainer, runningContainer), null);
+      nm1.registerNode(Arrays.asList(amContainer, runningContainer), null);
 
-    // Wait for RM to settle down on recovering containers;
-    TestWorkPreservingRMRestart.waitForNumContainersToRecover(2, rm2,
-        am1.getApplicationAttemptId());
-    Set<ContainerId> launchedContainers =
-        ((RMNodeImpl) rm2.getRMContext().getRMNodes().get(nm1.getNodeId()))
-            .getLaunchedContainers();
-    assertTrue(launchedContainers.contains(amContainer.getContainerId()));
-    assertTrue(launchedContainers.contains(runningContainer.getContainerId()));
+      // Wait for RM to settle down on recovering containers;
+      TestWorkPreservingRMRestart.waitForNumContainersToRecover(2, rm2,
+          am1.getApplicationAttemptId());
+      Set<ContainerId> launchedContainers =
+          ((RMNodeImpl) rm2.getRMContext().getRMNodes().get(nm1.getNodeId()))
+              .getLaunchedContainers();
+      assertTrue(launchedContainers.contains(amContainer.getContainerId()));
+      assertTrue(launchedContainers.contains(runningContainer.getContainerId()));
 
-    // check RMContainers are re-recreated and the container state is correct.
-    rm2.waitForState(nm1, amContainer.getContainerId(),
-        RMContainerState.RUNNING);
-    rm2.waitForState(nm1, runningContainer.getContainerId(),
-        RMContainerState.RUNNING);
+      // check RMContainers are re-recreated and the container state is correct.
+      rm2.waitForState(nm1, amContainer.getContainerId(),
+          RMContainerState.RUNNING);
+      rm2.waitForState(nm1, runningContainer.getContainerId(),
+          RMContainerState.RUNNING);
 
-    // re register attempt to rm2
-    rm2.waitForState(recoveredApp1.getApplicationId(), RMAppState.ACCEPTED);
-    am1.setAMRMProtocol(rm2.getApplicationMasterService(), rm2.getRMContext());
-    am1.registerAppAttempt();
-    rm2.waitForState(recoveredApp1.getApplicationId(), RMAppState.RUNNING);
+      // re register attempt to rm2
+      rm2.waitForState(recoveredApp1.getApplicationId(), RMAppState.ACCEPTED);
+      am1.setAMRMProtocol(rm2.getApplicationMasterService(), rm2.getRMContext());
+      am1.registerAppAttempt();
+      rm2.waitForState(recoveredApp1.getApplicationId(), RMAppState.RUNNING);
 
-    // wait for app life time and application to be in killed state.
-    rm2.waitForState(recoveredApp1.getApplicationId(), RMAppState.KILLED);
-    assertTrue(recoveredApp1.getFinishTime() > (recoveredApp1.getSubmitTime()
-        + appLifetime * 1000), "Application killed before lifetime value");
+      // wait for app life time and application to be in killed state.
+      rm2.waitForState(recoveredApp1.getApplicationId(), RMAppState.KILLED);
+      assertTrue(recoveredApp1.getFinishTime() > (recoveredApp1.getSubmitTime()
+          + appLifetime * 1000), "Application killed before lifetime value");
+    } finally {
+      stopRM(rm2);
+      stopRM(rm1);
+    }
   }
 
   @Timeout(value = 60)
