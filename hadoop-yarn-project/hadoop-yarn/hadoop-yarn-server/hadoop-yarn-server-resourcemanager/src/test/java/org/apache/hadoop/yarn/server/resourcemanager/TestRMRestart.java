@@ -1231,6 +1231,9 @@ public class TestRMRestart extends ParameterizedSchedulerTestBase {
   private MockAM launchAM(RMApp app, MockRM rm, MockNM nm)
       throws Exception {
     RMAppAttempt attempt = MockRM.waitForAttemptScheduled(app, rm);
+    // FairScheduler only offers a node to apps with a non-zero cached demand,
+    // refresh it so the AM request is seen by the next node heartbeat.
+    ((AbstractYarnScheduler) rm.getResourceScheduler()).update();
     nm.nodeHeartbeat(true);
     MockAM am = rm.sendAMLaunched(attempt.getAppAttemptId());
     am.registerAppAttempt();
