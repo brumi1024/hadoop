@@ -3082,6 +3082,8 @@ public class TestRMRestart extends ParameterizedSchedulerTestBase {
     allocateRequest.setTrackingUrl(newTrackingUrl);
 
     am1.allocate(allocateRequest);
+    // wait until RMAppAttemptEventType.STATUS_UPDATE is handled
+    rm.drainEvents();
     // Check in-memory and stored tracking url
     assertEquals(newTrackingUrl, rm.getRMContext().getRMApps().get(
         app1.getApplicationId()).getOriginalTrackingUrl());
