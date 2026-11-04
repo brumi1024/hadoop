@@ -126,6 +126,10 @@ public class MockRM extends ResourceManager {
   private static final int TIMEOUT_MS_FOR_APP_REMOVED = 40 * SECOND;
   private static final int TIMEOUT_MS_FOR_CONTAINER_AND_NODE = 20 * SECOND;
   private static final int WAIT_MS_PER_LOOP = 10;
+  // The default node attribute store dir is /tmp/hadoop-yarn-${user}, which
+  // is shared by every test JVM of the same user. Use a dir per JVM instead.
+  private static final String NODE_ATTRIBUTE_STORE_ROOT_DIR =
+      GenericTestUtils.getRandomizedTestDir().getAbsolutePath();
 
   private final boolean useNullRMNodeLabelsManager;
   private boolean disableDrainEventsImplicitly;
@@ -165,6 +169,8 @@ public class MockRM extends ResourceManager {
     }
     this.useNullRMNodeLabelsManager = useNullRMNodeLabelsManager;
     this.useRealElector = useRealElector;
+    conf.setIfUnset(YarnConfiguration.FS_NODE_ATTRIBUTE_STORE_ROOT_DIR,
+        NODE_ATTRIBUTE_STORE_ROOT_DIR);
     init(conf instanceof YarnConfiguration ? conf : new YarnConfiguration(conf));
     if (store != null) {
       setRMStateStore(store);
