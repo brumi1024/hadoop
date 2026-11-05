@@ -1278,6 +1278,9 @@ public class TestWorkPreservingRMRestart extends ParameterizedSchedulerTestBase 
     // cached release request is cleaned.
     // assertFalse(scheduler.getPendingRelease().contains(runningContainer));
 
+    // wait until the completion of the released container is sent to the
+    // attempt
+    rm2.drainEvents();
     AllocateResponse response = am1.allocate(null, null);
     // AM gets notified of the completed container.
     boolean receivedCompletedContainer = false;
