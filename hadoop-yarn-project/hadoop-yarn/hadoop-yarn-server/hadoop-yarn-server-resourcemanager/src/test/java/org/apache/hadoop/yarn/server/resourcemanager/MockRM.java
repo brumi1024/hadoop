@@ -129,7 +129,7 @@ public class MockRM extends ResourceManager {
   // The default node attribute store dir is /tmp/hadoop-yarn-${user}, which
   // is shared by every test JVM of the same user. Use a dir per JVM instead.
   private static final String NODE_ATTRIBUTE_STORE_ROOT_DIR =
-      GenericTestUtils.getRandomizedTestDir().getAbsolutePath();
+      GenericTestUtils.getRandomizedTestDir().toURI().toString();
 
   private final boolean useNullRMNodeLabelsManager;
   private boolean disableDrainEventsImplicitly;
