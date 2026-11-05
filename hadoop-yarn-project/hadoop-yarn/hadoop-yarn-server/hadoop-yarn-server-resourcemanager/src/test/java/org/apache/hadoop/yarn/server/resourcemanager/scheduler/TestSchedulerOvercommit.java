@@ -389,6 +389,8 @@ public abstract class TestSchedulerOvercommit {
     // Reduce the resources to kill C3 and C2 (not AM2)
     updateNodeResource(rm, nmId, 5 * GB, 6, 0);
     waitMemory(scheduler, nm, 5 * GB, 0 * GB, 200, 5 * 1000);
+    // wait until the RM has processed the killed containers
+    rm.drainEvents();
     assertEquals(3, scheduler.getNodeReport(nmId).getNumContainers());
 
     List<ContainerStatus> completedContainers =
@@ -407,6 +409,7 @@ public abstract class TestSchedulerOvercommit {
     // Reduce the resources to kill C1 (not AM2)
     updateNodeResource(rm, nmId, 4 * GB, 6, 0);
     waitMemory(scheduler, nm, 4 * GB, 0 * GB, 200, 5 * 1000);
+    rm.drainEvents();
     assertEquals(2, scheduler.getNodeReport(nmId).getNumContainers());
     completedContainers = am.schedule().getCompletedContainersStatuses();
     assertEquals(1, completedContainers.size());
@@ -418,6 +421,7 @@ public abstract class TestSchedulerOvercommit {
     // Reduce the resources to kill AM2
     updateNodeResource(rm, nmId, 2 * GB, 6, 0);
     waitMemory(scheduler, nm, 2 * GB, 0 * GB, 200, 5 * 1000);
+    rm.drainEvents();
     assertEquals(1, scheduler.getNodeReport(nmId).getNumContainers());
     assertEquals(RMAppAttemptState.FAILED, attempt2.getState());
 
