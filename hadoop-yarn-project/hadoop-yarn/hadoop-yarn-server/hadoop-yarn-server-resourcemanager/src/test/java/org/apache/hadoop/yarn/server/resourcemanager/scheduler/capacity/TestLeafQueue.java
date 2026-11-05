@@ -542,9 +542,10 @@ public class TestLeafQueue {
     assertEquals(app1.getAMResource().getVirtualCores(), a.getMetrics()
         .getUsedAMResourceVCores());
     
-    event = new AppAttemptRemovedSchedulerEvent(appAttemptId_0,
-        RMAppAttemptState.FINISHED, false);
-    cs.handle(event);
+    // app1 was submitted to the queue directly, finish it the same way.
+    // Removing the already stopped first attempt again would be a no-op.
+    app1.stop(RMAppAttemptState.FINISHED);
+    a.finishApplicationAttempt(app1, a.getQueuePath());
     AppRemovedSchedulerEvent rEvent = new AppRemovedSchedulerEvent(
         appAttemptId_0.getApplicationId(), RMAppState.FINISHED);
     cs.handle(rEvent);
@@ -610,9 +611,10 @@ public class TestLeafQueue {
     assertEquals(app1.getAMResource().getVirtualCores(), a.getMetrics()
         .getUsedAMResourceVCores());
 
-    event = new AppAttemptRemovedSchedulerEvent(appAttemptId0,
-        RMAppAttemptState.FINISHED, false);
-    cs.handle(event);
+    // app1 was submitted to the queue directly, finish it the same way.
+    // Removing the already stopped first attempt again would be a no-op.
+    app1.stop(RMAppAttemptState.FINISHED);
+    a.finishApplicationAttempt(app1, a.getQueuePath());
     AppRemovedSchedulerEvent rEvent = new AppRemovedSchedulerEvent(
         appAttemptId0.getApplicationId(), RMAppState.FINISHED);
     cs.handle(rEvent);
