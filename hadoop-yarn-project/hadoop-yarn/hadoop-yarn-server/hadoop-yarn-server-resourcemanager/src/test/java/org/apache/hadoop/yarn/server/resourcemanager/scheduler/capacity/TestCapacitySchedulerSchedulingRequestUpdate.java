@@ -39,8 +39,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.MockRMAppSubmitter;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.NullRMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.nodelabels.RMNodeLabelsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
-import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttemptState;
-import org.apache.hadoop.yarn.server.resourcemanager.scheduler.event.AppAttemptRemovedSchedulerEvent;
+import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppState;
 import org.apache.hadoop.yarn.util.resource.Resources;
 import org.junit.jupiter.api.Test;
 
@@ -166,13 +165,10 @@ public class TestCapacitySchedulerSchedulingRequestUpdate {
     checkPendingResource(rm, "root", 8 * GB, "x");
 
     // complete am1/am2, pending resource should be 0 now
-    AppAttemptRemovedSchedulerEvent appRemovedEvent =
-        new AppAttemptRemovedSchedulerEvent(am2.getApplicationAttemptId(),
-            RMAppAttemptState.FINISHED, false);
-    rm.getResourceScheduler().handle(appRemovedEvent);
-    appRemovedEvent = new AppAttemptRemovedSchedulerEvent(
-        am1.getApplicationAttemptId(), RMAppAttemptState.FINISHED, false);
-    rm.getResourceScheduler().handle(appRemovedEvent);
+    rm.killApp(app2.getApplicationId());
+    rm.waitForState(app2.getApplicationId(), RMAppState.KILLED);
+    rm.killApp(app1.getApplicationId());
+    rm.waitForState(app1.getApplicationId(), RMAppState.KILLED);
 
     checkPendingResource(rm, "a1", 0 * GB, null);
     checkPendingResource(rm, "a", 0 * GB, null);
@@ -284,13 +280,10 @@ public class TestCapacitySchedulerSchedulingRequestUpdate {
     checkPendingResource(rm, "root", 18 * GB, "x");
 
     // complete am1/am2, pending resource should be 0 now
-    AppAttemptRemovedSchedulerEvent appRemovedEvent =
-        new AppAttemptRemovedSchedulerEvent(am2.getApplicationAttemptId(),
-            RMAppAttemptState.FINISHED, false);
-    rm.getResourceScheduler().handle(appRemovedEvent);
-    appRemovedEvent = new AppAttemptRemovedSchedulerEvent(
-        am1.getApplicationAttemptId(), RMAppAttemptState.FINISHED, false);
-    rm.getResourceScheduler().handle(appRemovedEvent);
+    rm.killApp(app2.getApplicationId());
+    rm.waitForState(app2.getApplicationId(), RMAppState.KILLED);
+    rm.killApp(app1.getApplicationId());
+    rm.waitForState(app1.getApplicationId(), RMAppState.KILLED);
 
     checkPendingResource(rm, "a1", 0 * GB, null);
     checkPendingResource(rm, "a", 0 * GB, null);
