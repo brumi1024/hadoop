@@ -395,12 +395,13 @@ public class TestContinuousScheduling extends FairSchedulerTestBase {
     scheduler.allocate(id11, ask1, null, new ArrayList<ContainerId>(), null,
         null, NULL_UPDATE_REQUESTS);
 
+    // Tick the time and let the fsApp startTime different from initScheduler
+    // time. Do it before adding the node, as the continuous scheduling thread
+    // can allocate the container as soon as the node is added.
+    mockClock.tickSec(delayThresholdTimeMs / 1000);
     NodeAddedSchedulerEvent nodeEvent1 = new NodeAddedSchedulerEvent(node1);
     scheduler.handle(nodeEvent1);
     FSSchedulerNode node = scheduler.getSchedulerNode(node1.getNodeID());
-    // Tick the time and let the fsApp startTime different from initScheduler
-    // time
-    mockClock.tickSec(delayThresholdTimeMs / 1000);
     scheduler.attemptScheduling(node);
     GenericTestUtils.waitFor(new Supplier<Boolean>() {
       public Boolean get() {
