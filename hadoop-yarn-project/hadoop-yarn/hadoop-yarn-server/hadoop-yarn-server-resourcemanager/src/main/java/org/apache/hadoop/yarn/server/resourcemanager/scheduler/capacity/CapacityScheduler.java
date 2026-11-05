@@ -1249,6 +1249,13 @@ public class CapacityScheduler extends
         return;
       }
 
+      // Check if the attempt is already stopped and don't stop it twice.
+      if (attempt.isStopped()) {
+        LOG.info("Application Attempt " + applicationAttemptId
+            + " has already been stopped!");
+        return;
+      }
+
       // Release all the allocated, acquired, running containers
       for (RMContainer rmContainer : attempt.getLiveContainers()) {
         if (keepContainers && rmContainer.getState().equals(

@@ -33,6 +33,7 @@ import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.ContainerState;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
+import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.server.resourcemanager.MockAM;
 import org.apache.hadoop.yarn.server.resourcemanager.MockNM;
@@ -45,6 +46,7 @@ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppState;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttempt;
 import org.apache.hadoop.yarn.server.resourcemanager.rmapp.attempt.RMAppAttemptState;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.AbstractYarnScheduler;
+import org.apache.hadoop.yarn.server.resourcemanager.scheduler.event.AppAttemptRemovedSchedulerEvent;
 import org.apache.hadoop.yarn.util.resource.DominantResourceCalculator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -154,6 +156,57 @@ public class TestCapacitySchedulerMaxParallelApps {
         .build());
 
     rm.waitForState(app5.getApplicationId(), RMAppState.FAILED);
+  }
+
+  @Test
+  @Timeout(value = 30)
+  public void testDoubleAppAttemptRemoval() throws Exception {
+    // Avoid new attempts when the scheduler kills the AM containers
+    conf.setInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS, 1);
+    rm = new MockRM(conf);
+    rm.start();
+    nm1 = rm.registerNode("h1:1234", 4096, 8);
+    rm.registerNode("h2:1234", 4096, 8);
+    rm.registerNode("h3:1234", 4096, 8);
+    rm.drainEvents();
+
+    app1 = MockRMAppSubmitter.submit(rm,
+        MockRMAppSubmissionData.Builder.createWithMemory(512, rm)
+        .withAppName("app1")
+        .withUser("testuser")
+        .withQueue("default")
+        .build());
+    am1 = MockRM.launchAndRegisterAM(app1, rm, nm1);
+    app2 = MockRMAppSubmitter.submit(rm,
+        MockRMAppSubmissionData.Builder.createWithMemory(512, rm)
+        .withAppName("app2")
+        .withUser("testuser")
+        .withQueue("default")
+        .build());
+    am2 = MockRM.launchAndRegisterAM(app2, rm, nm1);
+
+    rootQueue = getRootQueue();
+    defaultQueue = getDefaultQueue();
+    verifyRunnableAppsInParent(rootQueue, 2);
+    verifyRunnableAppsInLeaf(defaultQueue, 2, Collections.emptySet());
+
+    // Remove the attempt of app1 twice, the second removal is a no-op
+    CapacityScheduler cs = (CapacityScheduler) rm.getResourceScheduler();
+    AppAttemptRemovedSchedulerEvent removedEvent =
+        new AppAttemptRemovedSchedulerEvent(am1.getApplicationAttemptId(),
+            RMAppAttemptState.FINISHED, false);
+    cs.handle(removedEvent);
+    cs.handle(removedEvent);
+    rm.drainEvents();
+    verifyRunnableAppsInParent(rootQueue, 1);
+    verifyRunnableAppsInLeaf(defaultQueue, 1, Collections.emptySet());
+
+    // The attempt of app2 of the same user can still be removed
+    cs.handle(new AppAttemptRemovedSchedulerEvent(
+        am2.getApplicationAttemptId(), RMAppAttemptState.FINISHED, false));
+    rm.drainEvents();
+    verifyRunnableAppsInParent(rootQueue, 0);
+    verifyRunnableAppsInLeaf(defaultQueue, 0, Collections.emptySet());
   }
 
   private void executeCommonStepsAndChecks() throws Exception {
