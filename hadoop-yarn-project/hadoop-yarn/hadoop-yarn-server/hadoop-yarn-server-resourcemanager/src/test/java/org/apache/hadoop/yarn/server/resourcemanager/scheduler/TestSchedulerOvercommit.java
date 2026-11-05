@@ -380,7 +380,7 @@ public abstract class TestSchedulerOvercommit {
     MockAM am2 = rm.sendAMLaunched(attempt2.getAppAttemptId());
     am2.registerAppAttempt();
     waitMemory(scheduler, nm, 6 * GB, 2 * GB, 200, 5 * 1000);
-    assertEquals(RMAppAttemptState.RUNNING, attempt2.getState());
+    rm.waitForState(attempt2.getAppAttemptId(), RMAppAttemptState.RUNNING);
 
     Container c3 = createContainer(am2, 2 * GB);
     waitMemory(scheduler, nm, 8 * GB, 0 * GB, 200, 5 * 1000);
