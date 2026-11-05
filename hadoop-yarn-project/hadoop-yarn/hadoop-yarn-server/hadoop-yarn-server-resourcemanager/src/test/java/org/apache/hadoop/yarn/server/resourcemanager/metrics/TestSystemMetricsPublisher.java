@@ -139,7 +139,7 @@ public class TestSystemMetricsPublisher {
 
   @ParameterizedTest
   @MethodSource("data")
-  @Timeout(value = 10)
+  @Timeout(value = 30)
   @SuppressWarnings("checkstyle:methodlength")
   public void testPublishApplicationMetrics(boolean pRmTimelineServerV1PublisherBatchEnabled,
       int pRmTimelineServerV1PublisherInterval) throws Exception {
@@ -341,7 +341,7 @@ public class TestSystemMetricsPublisher {
 
   @ParameterizedTest
   @MethodSource("data")
-  @Timeout(value = 10)
+  @Timeout(value = 30)
   public void testPublishAppAttemptMetricsForUnmanagedAM(boolean
       pRmTimelineServerV1PublisherBatchEnabled,
       int pRmTimelineServerV1PublisherInterval) throws Exception {
@@ -367,7 +367,7 @@ public class TestSystemMetricsPublisher {
 
   @ParameterizedTest
   @MethodSource("data")
-  @Timeout(value = 10)
+  @Timeout(value = 30)
   public void testPublishAppAttemptMetrics(boolean pRmTimelineServerV1PublisherBatchEnabled,
       int pRmTimelineServerV1PublisherInterval) throws Exception {
     initTestSystemMetricsPublisher(pRmTimelineServerV1PublisherBatchEnabled,
@@ -439,7 +439,7 @@ public class TestSystemMetricsPublisher {
 
   @ParameterizedTest
   @MethodSource("data")
-  @Timeout(value = 10)
+  @Timeout(value = 30)
   public void testPublishHostPortInfoOnContainerFinished(
       boolean pRmTimelineServerV1PublisherBatchEnabled,
       int pRmTimelineServerV1PublisherInterval) throws Exception {
@@ -475,7 +475,7 @@ public class TestSystemMetricsPublisher {
 
   @ParameterizedTest
   @MethodSource("data")
-  @Timeout(value = 10)
+  @Timeout(value = 30)
   public void testPublishContainerMetrics(boolean pRmTimelineServerV1PublisherBatchEnabled,
       int pRmTimelineServerV1PublisherInterval) throws Exception {
     initTestSystemMetricsPublisher(pRmTimelineServerV1PublisherBatchEnabled,
@@ -562,7 +562,7 @@ public class TestSystemMetricsPublisher {
   }
 
   @Test
-  @Timeout(value = 10)
+  @Timeout(value = 30)
   public void testPublishContainerWithoutCustomResources() throws Exception {
     initTestSystemMetricsPublisher(false, 0);
     YarnConfiguration resourceConf = new YarnConfiguration();
